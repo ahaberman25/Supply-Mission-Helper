@@ -1,27 +1,22 @@
-using Dalamud.Configuration;
-using Dalamud.Plugin;
-using System;
+using Dalamud.Configuration;   // IPluginConfiguration
+using Dalamud.Plugin;          // IDalamudPluginInterface
 
-namespace SupplyMissionHelper;
-
-[Serializable]
-public class Configuration : IPluginConfiguration
+namespace SupplyMissionHelper
 {
-    public int Version { get; set; } = 0;
-
-    public bool ShowRawMaterialsOnly { get; set; } = true;
-    public bool IncludeGatheringLocations { get; set; } = false;
-
-    [NonSerialized]
-    private IDalamudPluginInterface? pluginInterface;
-
-    public void Initialize(IDalamudPluginInterface pluginInterface)
+    public sealed class Configuration : IPluginConfiguration
     {
-        this.pluginInterface = pluginInterface;
-    }
+        public int Version { get; set; } = 1;
 
-    public void Save()
-    {
-        this.pluginInterface!.SavePluginConfig(this);
+        public bool ShowRawMaterialsOnly { get; set; }
+        public bool IncludeGatheringLocations { get; set; }
+
+        private IDalamudPluginInterface? _pi;
+
+        public void Initialize(IDalamudPluginInterface pluginInterface)
+        {
+            _pi = pluginInterface;
+        }
+
+        public void Save() => _pi?.SavePluginConfig(this);
     }
 }
