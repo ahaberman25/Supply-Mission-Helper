@@ -1,12 +1,12 @@
 [
   {
-    "Author": "Andrew",
+    "Author": "ahaberman25",
     "Name": "Supply Mission Helper",
     "Punchline": "Calculate materials needed for Grand Company Supply Missions",
     "Description": "This plugin scans your daily Grand Company Supply Missions and provides a comprehensive list of all materials needed to complete them, including raw materials for crafting.",
     "InternalName": "SupplyMissionHelper",
     "AssemblyVersion": "0.0.1.0",
-    "RepoUrl": "https://github.com/andrewpdg/Supply-Mission-Helper",
+    "RepoUrl": "https://github.com/ahaberman25/Supply-Mission-Helper",
     "ApplicableVersion": "any",
     "Tags": [
       "Grand Company",
@@ -15,13 +15,13 @@
       "Supply Missions"
     ],
     "DalamudApiLevel": 10,
-    "IconUrl": "https://raw.githubusercontent.com/andrewpdg/Supply-Mission-Helper/main/images/icon.png",
+    "IconUrl": "https://raw.githubusercontent.com/ahaberman25/Supply-Mission-Helper/main/images/icon.png",
     "ImageUrls": [
-      "https://raw.githubusercontent.com/andrewpdg/Supply-Mission-Helper/main/images/screenshot1.png"
+      "https://raw.githubusercontent.com/ahaberman25/Supply-Mission-Helper/main/images/screenshot1.png"
     ],
-    "DownloadLinkInstall": "https://github.com/andrewpdg/Supply-Mission-Helper/releases/latest/download/SupplyMissionHelper.zip",
-    "DownloadLinkUpdate": "https://github.com/andrewpdg/Supply-Mission-Helper/releases/latest/download/SupplyMissionHelper.zip",
-    "DownloadLinkTesting": "https://github.com/andrewpdg/Supply-Mission-Helper/releases/latest/download/SupplyMissionHelper.zip",
+    "DownloadLinkInstall": "https://github.com/ahaberman25/Supply-Mission-Helper/releases/latest/download/SupplyMissionHelper.zip",
+    "DownloadLinkUpdate": "https://github.com/ahaberman25/Supply-Mission-Helper/releases/latest/download/SupplyMissionHelper.zip",
+    "DownloadLinkTesting": "https://github.com/ahaberman25/Supply-Mission-Helper/releases/latest/download/SupplyMissionHelper.zip",
     "DownloadCount": 0,
     "LastUpdated": "0"
   }
