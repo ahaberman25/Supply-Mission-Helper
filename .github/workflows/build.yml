@@ -34,16 +34,27 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          dotnet build --configuration Release --no-restore /p:DalamudLibPath="${env:DALAMUD_HOME}\"
-          if ($LASTEXITCODE -ne 0) {
-            Write-Error "Build failed with exit code $LASTEXITCODE"
-            exit $LASTEXITCODE
+          Write-Host "=== Starting Build ==="
+          Write-Host "DalamudLibPath: ${env:DALAMUD_HOME}"
+          
+          dotnet build --configuration Release --no-restore /p:DalamudLibPath="${env:DALAMUD_HOME}\" -v:detailed
+          
+          $exitCode = $LASTEXITCODE
+          Write-Host "Build exit code: $exitCode"
+          
+          if ($exitCode -ne 0) {
+            Write-Error "Build failed with exit code $exitCode"
+            exit $exitCode
           }
+          
+          Write-Host "=== Build completed successfully ===
+
+"
 
       - name: Verify Build Output
         shell: pwsh
         run: |
-          $dllPath = "bin/Release/net9.0-windows/SupplyMissionHelper.dll"
+          $dllPath = "bin/Release/SupplyMissionHelper.dll"
           if (-not (Test-Path $dllPath)) {
             Write-Error "Build output not found at $dllPath"
             Write-Host "Contents of bin/Release:"
@@ -55,11 +66,9 @@ jobs:
       - name: Package
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart('v')
-          
           # Create package
           New-Item -ItemType Directory -Force -Path "release"
-          Copy-Item "bin/Release/net9.0-windows/SupplyMissionHelper.dll" -Destination "release/"
+          Copy-Item "bin/Release/SupplyMissionHelper.dll" -Destination "release/"
           Copy-Item "SupplyMissionHelper.json" -Destination "release/"
           Compress-Archive -Path "release/*" -DestinationPath "SupplyMissionHelper.zip" -Force
 
