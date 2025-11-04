@@ -11,7 +11,7 @@ namespace SupplyMissionHelper
         public string Name => "Supply Mission Helper";
         private const string CommandName = "/supplymission";
 
-        private DalamudPluginInterface PluginInterface { get; init; }
+        private IDalamudPluginInterface PluginInterface { get; init; }
         private ICommandManager CommandManager { get; init; }
         private IDataManager DataManager { get; init; }
         private IGameGui GameGui { get; init; }
@@ -26,7 +26,7 @@ namespace SupplyMissionHelper
         public AddonInspector Inspector { get; init; }
 
         public SupplyMissionHelper(
-            DalamudPluginInterface pluginInterface,
+            IDalamudPluginInterface pluginInterface,
             ICommandManager commandManager,
             IDataManager dataManager,
             IGameGui gameGui,
