@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Runtime.InteropServices;
+using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
@@ -13,16 +14,25 @@ namespace SupplyMissionHelper
         private readonly IDataManager _data;
         private readonly IPluginLog _log;
 
+        // Primary target: the actual Supply & Provisioning list
         private static readonly string[] PrimaryGcAddons = { "GrandCompanySupplyList" };
+
+        // Secondary / dashboard UIs we **don’t** parse – we’ll nudge the user instead
         private static readonly string[] KnownDashboards = { "ContentsInfoDetail", "ContentsInfo" };
+
+        // Filters to ignore header/label text from parsing
+        private static readonly string[] HeaderKeywords =
+        {
+            "Supply Missions", "Provisioning Missions", "Requested", "Qty.", "Close"
+        };
 
         public bool IsReady => _gameGui is not null && _data is not null;
 
         public MissionScanner(IGameGui gameGui, IDataManager dataManager, IPluginLog log)
         {
-            _gameGui = gameGui;
-            _data = dataManager;
-            _log = log;
+            _gameGui   = gameGui;
+            _data      = dataManager;
+            _log       = log;
         }
 
         public bool IsSupplyWindowOpen() => GetAddonPtr(PrimaryGcAddons) != nint.Zero;
@@ -35,14 +45,15 @@ namespace SupplyMissionHelper
             var gcPtr = GetAddonPtr(PrimaryGcAddons);
             if (gcPtr == nint.Zero)
             {
+                // If the dashboard is up, guide the user
                 var dashPtr = GetAddonPtr(KnownDashboards);
                 if (dashPtr != nint.Zero)
                 {
-                    status = "Detected the Contents Info dashboard. Open the GC Personnel Officer → “Supply & Provisioning Missions” list window.";
+                    status = "Detected the Contents Info dashboard. Open GC Personnel Officer → “Supply & Provisioning Missions”.";
                     return results;
                 }
 
-                status = "Supply Mission list not detected. Open the GC “Supply & Provisioning Missions” window.";
+                status = "Supply Mission list not detected. Open GC “Supply & Provisioning Missions”.";
                 return results;
             }
 
@@ -55,63 +66,70 @@ namespace SupplyMissionHelper
                     return results;
                 }
 
-                // 1) find an AtkComponentList (the rows/table)
+                // Short-circuit: common “capped” text
+                var allWinText = CollectText(unit);
+                if (allWinText.Any(x => x.Contains("No more deliveries are being accepted today", StringComparison.OrdinalIgnoreCase)))
+                {
+                    status = "No missions available today.";
+                    return results;
+                }
+
+                // 1) Find the list (table) component
                 var list = FindFirstListComponent(unit);
                 if (list == null)
                 {
-                    // No list found: dump a few texts to help mapping and return a friendly status.
-                    var all = CollectText(unit);
-                    if (all.Any(x => x.Contains("No more deliveries are being accepted today", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        status = "No missions available today.";
-                        return results;
-                    }
-
                     status = "GC list detected, but rows component wasn’t found (UI variant?).";
                     return results;
                 }
 
-                // 2) iterate visible list items and scrape text from each row
-                var rowCount = list->ListLength; // total rows (includes empty/headers)
+                // 2) Walk each visible row, scrape child text nodes
+                var rowCount = list->ListLength; // can include padding rows
                 for (int i = 0; i < rowCount; i++)
                 {
-                    var item = list->GetItemRenderer(i);
-                    if (item == null || !item->AtkResNode.IsVisible())
-                        continue;
+                    var renderer = list->GetItemRenderer(i);
+                    if (renderer == null) continue;
 
-                    // Typical row: multiple children; one text is the item name, one is qty.
-                    // We gather all texts in the row and then pick name + qty heuristically.
-                    var texts = CollectTextFromNode(&item->AtkResNode);
+                    var rowRoot = &renderer->AtkResNode;
+                    if (!rowRoot->IsVisible()) continue;
+
+                    var texts = CollectTextFromNode(rowRoot);
                     if (texts.Count == 0) continue;
 
-                    var qty = TryPickQty(texts, out var val) ? val : 0;
-                    var name = TryPickName(texts);
+                    // Filter obvious headers/labels/instructions
+                    texts = texts.Where(t => !IsHeaderish(t)).ToList();
+                    if (texts.Count == 0) continue;
 
-                    if (!string.IsNullOrEmpty(name) && qty > 0)
+                    // From the row texts, pick:
+                    //  - Name: longest non-numeric string
+                    //  - Requested Qty: first integer text, or right-hand number in an "N/M" pattern
+                    var name = PickName(texts);
+                    var qty  = PickRequestedQty(texts);
+
+                    if (!string.IsNullOrWhiteSpace(name) && qty > 0)
                     {
                         results.Add(new MissionItem
                         {
-                            Name = name,
+                            Name     = name,
                             Quantity = qty,
-                            ItemId = 0 // we’ll resolve to itemId later via Lumina (by Name → Item sheet)
+                            ItemId   = 0 // later: resolve via Lumina Item sheet
                         });
                     }
                 }
 
                 if (results.Count == 0)
                 {
-                    status = "GC list parsed, but no mission rows with (name, qty) found (maybe capped today).";
+                    status = "GC list parsed, but no (name, qty) rows found (possibly capped today).";
                     return results;
                 }
 
-                // Merge dupes by name (if the UI shows the same item in supply/provisioning)
+                // Merge duplicates by name (just in case)
                 results = results
                     .GroupBy(r => r.Name ?? string.Empty)
                     .Select(g => new MissionItem
                     {
-                        Name = g.Key,
+                        Name     = g.Key,
                         Quantity = g.Sum(x => x.Quantity),
-                        ItemId = 0
+                        ItemId   = 0
                     })
                     .ToList();
 
@@ -131,10 +149,66 @@ namespace SupplyMissionHelper
                     var ptr = _gameGui.GetAddonByName(n, 1);
                     if (ptr != nint.Zero) return ptr;
                 }
-                catch { }
+                catch { /* ignored */ }
             }
             return nint.Zero;
         }
+
+        private static bool IsHeaderish(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return true;
+            foreach (var kw in HeaderKeywords)
+                if (s.Equals(kw, StringComparison.OrdinalIgnoreCase)) return true;
+            return false;
+        }
+
+        private static string? PickName(List<string> texts)
+        {
+            // pick the longest non-numeric, non “N/M” text as the name
+            string? best = null;
+            foreach (var t in texts)
+            {
+                if (LooksLikeNumber(t) || LooksLikeFraction(t)) continue;
+                if (best == null || t.Length > best.Length) best = t;
+            }
+            return best;
+        }
+
+        private static int PickRequestedQty(List<string> texts)
+        {
+            // if a fraction "N/M" exists, prefer the right-hand side as the requested/target amount
+            foreach (var t in texts)
+            {
+                if (TryParseFraction(t, out var left, out var right))
+                    return Math.Max(left, right); // some UIs show "0/20" – target is 20
+            }
+            // else, take the first standalone integer found (often under "Requested")
+            foreach (var t in texts)
+            {
+                if (int.TryParse(t, out var n) && n > 0) return n;
+            }
+            return 0;
+        }
+
+        private static bool LooksLikeNumber(string s) => int.TryParse(s, out _);
+
+        private static bool LooksLikeFraction(string s) => FractionRegex().IsMatch(s);
+
+        private static bool TryParseFraction(string s, out int left, out int right)
+        {
+            var m = FractionRegex().Match(s);
+            if (m.Success &&
+                int.TryParse(m.Groups["a"].Value, out left) &&
+                int.TryParse(m.Groups["b"].Value, out right))
+            {
+                return true;
+            }
+            left = right = 0;
+            return false;
+        }
+
+        [GeneratedRegex(@"^\s*(?<a>\d+)\s*\/\s*(?<b>\d+)\s*$")]
+        private static partial Regex FractionRegex();
 
         private unsafe static AtkComponentList* FindFirstListComponent(AtkUnitBase* unit)
         {
@@ -147,7 +221,6 @@ namespace SupplyMissionHelper
                 var compNode = (AtkComponentNode*)node;
                 if (compNode->Component == null) continue;
 
-                // ComponentType == List → AtkComponentList
                 if (compNode->Component->Type == ComponentType.List)
                     return (AtkComponentList*)compNode->Component;
             }
@@ -174,57 +247,34 @@ namespace SupplyMissionHelper
         private unsafe static List<string> CollectTextFromNode(AtkResNode* root)
         {
             var texts = new List<string>();
-            Walk(root, n =>
-            {
-                if (n->Type == NodeType.Text)
-                {
-                    var t = (AtkTextNode*)n;
-                    if (t->NodeText.StringPtr != null)
-                    {
-                        var s = t->NodeText.ToString();
-                        if (!string.IsNullOrWhiteSpace(s))
-                            texts.Add(s.Trim());
-                    }
-                }
-            });
+            TraverseNode(root, texts);
             return texts;
         }
 
-        private unsafe static void Walk(AtkResNode* node, Action<AtkResNode*> visitor)
+        private unsafe static void TraverseNode(AtkResNode* node, List<string> acc)
         {
             if (node == null) return;
-            visitor(node);
-            for (var c = node->ChildNode; c != null; c = c->NextSiblingNode)
-                Walk(c, visitor);
-        }
 
-        private static bool TryPickQty(List<string> texts, out int qty)
-        {
-            // Look for an integer or "x N" in row texts; prefer the smallest positive number.
-            foreach (var s in texts)
+            if (node->Type == NodeType.Text)
             {
-                if (int.TryParse(s, out qty) && qty > 0) return true;
-                var idx = s.IndexOf('x');
-                if (idx >= 0 && int.TryParse(s[(idx + 1)..].Trim(), out qty) && qty > 0) return true;
+                var t = (AtkTextNode*)node;
+                if (t->NodeText.StringPtr != null)
+                {
+                    var s = t->NodeText.ToString();
+                    if (!string.IsNullOrWhiteSpace(s))
+                        acc.Add(s.Trim());
+                }
             }
-            qty = 0; return false;
-        }
 
-        private static string? TryPickName(List<string> texts)
-        {
-            // Heuristic: longest non-numeric string in the row is usually the item name.
-            var nameish = texts
-                .Where(t => !int.TryParse(t, out _))
-                .OrderByDescending(t => t.Length)
-                .FirstOrDefault();
-            return string.IsNullOrWhiteSpace(nameish) ? null : nameish;
+            for (var child = node->ChildNode; child != null; child = child->NextSiblingNode)
+                TraverseNode(child, acc);
         }
     }
 
     public sealed class MissionItem
     {
-        public uint ItemId { get; set; }
-        public string? Name { get; set; }
-        public int Quantity { get; set; }
+        public uint   ItemId   { get; set; }
+        public string? Name    { get; set; }
+        public int    Quantity { get; set; } // requested amount
     }
 }
