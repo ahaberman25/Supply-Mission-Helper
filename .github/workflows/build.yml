@@ -33,7 +33,24 @@ jobs:
 
       - name: Build
         shell: pwsh
-        run: dotnet build --configuration Release --no-restore /p:DalamudLibPath="${env:DALAMUD_HOME}\"
+        run: |
+          dotnet build --configuration Release --no-restore /p:DalamudLibPath="${env:DALAMUD_HOME}\"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Build failed with exit code $LASTEXITCODE"
+            exit $LASTEXITCODE
+          }
+
+      - name: Verify Build Output
+        shell: pwsh
+        run: |
+          $dllPath = "bin/Release/net9.0-windows/SupplyMissionHelper.dll"
+          if (-not (Test-Path $dllPath)) {
+            Write-Error "Build output not found at $dllPath"
+            Write-Host "Contents of bin/Release:"
+            Get-ChildItem "bin/Release" -Recurse | Select-Object FullName
+            exit 1
+          }
+          Write-Host "✓ Build output found: $dllPath"
 
       - name: Package
         shell: pwsh
