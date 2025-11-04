@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
+
   <PropertyGroup>
     <Authors>ahaberman25</Authors>
     <Company>ahaberman25</Company>
@@ -9,7 +10,8 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <!-- Dalamud.Sdk targets .NET 8; keep this on net8.0-windows -->
+    <TargetFramework>net8.0-windows</TargetFramework>
     <Platforms>x64</Platforms>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -18,45 +20,11 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 
-  <PropertyGroup>
-    <DalamudLibPath Condition="'$(DalamudLibPath)' == ''">$(appdata)\XIVLauncher\addon\Hooks\dev\</DalamudLibPath>
-  </PropertyGroup>
-
   <ItemGroup>
+    <!-- Pulls in Dalamud, ImGui.NET, Lumina, etc. for compile-time -->
+    <PackageReference Include="Dalamud.Sdk" Version="11.0.0" />
+    <!-- Keep your packager -->
     <PackageReference Include="DalamudPackager" Version="2.1.13" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Reference Include="Dalamud">
-      <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Dalamud.Bindings.ImGui">
-      <HintPath>$(DalamudLibPath)Dalamud.Bindings.ImGui.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Lumina">
-      <HintPath>$(DalamudLibPath)Lumina.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="Lumina.Excel">
-      <HintPath>$(DalamudLibPath)Lumina.Excel.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="FFXIVClientStructs">
-      <HintPath>$(DalamudLibPath)FFXIVClientStructs.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-      <!-- ImGui.NET (required for ImGui bindings like ImGui.Text/Checkbox/etc.) -->
-    <Reference Include="ImGui.NET">
-      <HintPath>$(DalamudLibPath)ImGui.NET.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <!-- Dalamud.Interface (commonly used alongside ImGui) -->
-    <Reference Include="Dalamud.Interface">
-      <HintPath>$(DalamudLibPath)Dalamud.Interface.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
   </ItemGroup>
 
 </Project>
