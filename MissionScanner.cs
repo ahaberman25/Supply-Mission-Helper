@@ -74,6 +74,7 @@ namespace SupplyMissionHelper
             var supplyRows       = CollectRowComponentsBetween(unit, supplyHeaderIdx, provisioningHeaderIdx);
             var provisioningRows = CollectRowComponentsBetween(unit, provisioningHeaderIdx, unit->UldManager.NodeListCount);
 
+
             // Parse with precise child indices (name=#4, requested=#7, onHand=#8)
             ParseRowComponents(supplyRows, "Supply", results);
             ParseRowComponents(provisioningRows, "Provisioning", results);
@@ -162,10 +163,10 @@ namespace SupplyMissionHelper
         }
 
 
-        private static List<AtkComponentNode*> CollectRowComponentsBetween(AtkUnitBase* unit, int startExclusive, int endExclusive)
+        private static List<nint> CollectRowComponentsBetween(AtkUnitBase* unit, int startExclusive, int endExclusive)
         {
-            var rows = new List<AtkComponentNode*>();
-            var max = unit->UldManager.NodeListCount;
+            var rows = new List<nint>();
+            var max  = unit->UldManager.NodeListCount;
 
             startExclusive = Math.Clamp(startExclusive, -1, max);
             endExclusive   = Math.Clamp(endExclusive, 0,  max);
@@ -175,7 +176,7 @@ namespace SupplyMissionHelper
                 var node = unit->UldManager.NodeList[i];
                 if (node == null) continue;
 
-                // Stop if we hit another header text
+                // stop if another header text is encountered
                 if (node->Type == NodeType.Text)
                 {
                     var t = (AtkTextNode*)node;
@@ -189,19 +190,20 @@ namespace SupplyMissionHelper
                 }
 
                 if (node->Type != NodeType.Component) continue;
-                var comp = (AtkComponentNode*)node;
-                if (comp->Component == null) continue;
+                var compNode = (AtkComponentNode*)node;
+                if (compNode->Component == null) continue;
 
-                rows.Add(comp);
+                rows.Add((nint)compNode); // store the pointer as nint
             }
 
             return rows;
         }
 
-        private static void ParseRowComponents(List<AtkComponentNode*> rows, string section, List<MissionItem> sink)
+        private static void ParseRowComponents(IEnumerable<nint> rows, string section, List<MissionItem> sink)
         {
-            foreach (var compNode in rows)
+            foreach (var rowPtr in rows)
             {
+                var compNode = (AtkComponentNode*)rowPtr;   // cast back to pointer
                 var comp = compNode->Component;
                 var uld  = comp->UldManager;
                 if (uld.NodeList == null || uld.NodeListCount == 0) continue;
@@ -210,23 +212,14 @@ namespace SupplyMissionHelper
                 int requested = 0;
                 int onHand = 0;
 
-                // Preferred fixed child slots based on your inspection:
-                //  - name at index 4
-                //  - requested at index 7
-                //  - onHand at index 8
-                // We still fall back to scanning all text children if these aren't present.
-
                 ReadTextAt(uld, 4, out var nameCandidate);
                 if (!string.IsNullOrWhiteSpace(nameCandidate))
                     name = nameCandidate!.Trim();
 
-                if (TryReadIntAt(uld, 7, out var req))
-                    requested = req;
+                if (TryReadIntAt(uld, 7, out var req))  requested = req;
+                if (TryReadIntAt(uld, 8, out var have)) onHand   = have;
 
-                if (TryReadIntAt(uld, 8, out var have))
-                    onHand = have;
-
-                // Fallbacks if any field missing
+                // Fallback scan if needed
                 if (name is null || requested == 0)
                 {
                     for (var j = 0; j < uld.NodeListCount; j++)
@@ -239,22 +232,18 @@ namespace SupplyMissionHelper
 
                         var s = t->NodeText.ToString().Trim();
                         if (string.IsNullOrWhiteSpace(s)) continue;
-
-                        // ignore obvious fraction column like "0/20"
                         if (LooksLikeFraction(s)) continue;
 
-                        if (requested == 0 && IsNumeric(s) && int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
+                        if (requested == 0 && IsNumeric(s) &&
+                            int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
                         {
-                            requested = iv;
-                            continue;
+                            requested = iv; continue;
                         }
 
-                        if (name is null || s.Length > name.Length)
-                            name = s;
+                        if (name is null || s.Length > name.Length) name = s;
                     }
                 }
 
-                // On-hand fallback if still zero but a clean int text exists
                 if (onHand == 0)
                 {
                     for (var j = 0; j < uld.NodeListCount; j++)
@@ -266,12 +255,10 @@ namespace SupplyMissionHelper
                         if (t->NodeText.StringPtr == null) continue;
 
                         var s = t->NodeText.ToString().Trim();
-                        if (string.IsNullOrWhiteSpace(s)) continue;
-                        if (LooksLikeFraction(s)) continue;
+                        if (string.IsNullOrWhiteSpace(s) || LooksLikeFraction(s)) continue;
 
                         if (IsNumeric(s) && int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
                         {
-                            // Avoid clobbering requested if we already have it
                             if (iv != requested) { onHand = iv; break; }
                         }
                     }
