@@ -1,5 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project Sdk="Dalamud.NET.Sdk/13.0.0">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!-- Bring in the Dalamud v13 MSBuild SDK -->
+  <Sdk Name="Dalamud.NET.Sdk" Version="13.1.0" />
+
   <PropertyGroup>
     <Authors>ahaberman25</Authors>
     <Company>ahaberman25</Company>
@@ -7,7 +11,7 @@
     <Description>Calculate materials needed for Grand Company Supply Missions</Description>
     <PackageProjectUrl>https://github.com/ahaberman25/Supply-Mission-Helper</PackageProjectUrl>
 
-    <!-- v13 targets .NET 9 -->
+    <!-- v13 runs on .NET 9 -->
     <TargetFramework>net9.0-windows</TargetFramework>
     <Platforms>x64</Platforms>
     <Nullable>enable</Nullable>
@@ -15,5 +19,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+
+    <!-- Optional but tidy to declare -->
+    <DalamudApiLevel>13</DalamudApiLevel>
   </PropertyGroup>
+
 </Project>
