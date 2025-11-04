@@ -2,7 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Numerics;
 using Dalamud.Interface.Windowing;
-using ImGuiNET;
+using static Dalamud.Interface.Utility.ImGuiHelpers;
 
 namespace SupplyMissionHelper
 {
@@ -13,7 +13,7 @@ namespace SupplyMissionHelper
         private string statusMessage = "Ready";
 
         public MainWindow(SupplyMissionHelper plugin) : base(
-            "Supply Mission Helper", ImGuiWindowFlags.None)
+            "Supply Mission Helper")
         {
             this.SizeConstraints = new WindowSizeConstraints
             {
@@ -31,85 +31,85 @@ namespace SupplyMissionHelper
 
         public override void Draw()
         {
-            ImGui.Text("Supply Mission Helper");
-            ImGui.Spacing();
+           ImGuiNET.ImGui.Text("Supply Mission Helper");
+            ImGuiNET.ImGui.Spacing();
 
             // Button row
-            if (ImGui.Button("Scan Supply Missions"))
+            if (ImGuiNET.ImGui.Button("Scan Supply Missions"))
             {
                 ScanSupplyMissions();
             }
             
-            ImGui.SameLine();
+            ImGuiNET.ImGui.SameLine();
             
-            if (ImGui.Button("Inspect Addon (Debug)"))
+            if (ImGuiNET.ImGui.Button("Inspect Addon (Debug)"))
             {
                 Plugin.Inspector.InspectSupplyMissionAddon();
             }
 
-            ImGui.Spacing();
+            ImGuiNET.ImGui.Spacing();
             
             // Status message
             if (!string.IsNullOrEmpty(statusMessage))
             {
-                ImGui.TextColored(new Vector4(0.8f, 0.8f, 0.8f, 1.0f), statusMessage);
+                ImGuiNET.ImGui.TextColored(new Vector4(0.8f, 0.8f, 0.8f, 1.0f), statusMessage);
             }
 
-            ImGui.Spacing();
-            ImGui.Separator();
-            ImGui.Spacing();
+            ImGuiNET.ImGui.Spacing();
+            ImGuiNET.ImGui.Separator();
+            ImGuiNET.ImGui.Spacing();
 
             // Display scanned missions
             if (scannedMissions.Count > 0)
             {
-                ImGui.Text($"Found {scannedMissions.Count} supply missions:");
-                ImGui.Spacing();
+                ImGuiNET.ImGui.Text($"Found {scannedMissions.Count} supply missions:");
+                ImGuiNET.ImGui.Spacing();
 
-                if (ImGui.BeginTable("MissionsTable", 4, ImGuiTableFlags.Borders | ImGuiTableFlags.RowBg))
+                if (ImGuiNET.ImGui.BeginTable("MissionsTable", 4, ImGuiNET.ImGuiTableFlags.Borders | ImGuiNET.ImGuiTableFlags.RowBg))
                 {
-                    ImGui.TableSetupColumn("Item Name");
-                    ImGui.TableSetupColumn("Type");
-                    ImGui.TableSetupColumn("Quantity");
-                    ImGui.TableSetupColumn("HQ");
-                    ImGui.TableHeadersRow();
+                    ImGuiNET.ImGui.TableSetupColumn("Item Name");
+                    ImGuiNET.ImGui.TableSetupColumn("Type");
+                    ImGuiNET.ImGui.TableSetupColumn("Quantity");
+                    ImGuiNET.ImGui.TableSetupColumn("HQ");
+                    ImGuiNET.ImGui.TableHeadersRow();
 
                     foreach (var mission in scannedMissions)
                     {
-                        ImGui.TableNextRow();
+                        ImGuiNET.ImGui.TableNextRow();
                         
-                        ImGui.TableNextColumn();
-                        ImGui.Text(mission.ItemName);
+                        ImGuiNET.ImGui.TableNextColumn();
+                        ImGuiNET.ImGui.Text(mission.ItemName);
                         
-                        ImGui.TableNextColumn();
-                        ImGui.Text(mission.MissionType.ToString());
+                        ImGuiNET.ImGui.TableNextColumn();
+                        ImGuiNET.ImGui.Text(mission.MissionType.ToString());
                         
-                        ImGui.TableNextColumn();
-                        ImGui.Text($"{mission.QuantityNeeded}/{mission.QuantityRequested}");
+                        ImGuiNET.ImGui.TableNextColumn();
+                        ImGuiNET.ImGui.Text($"{mission.QuantityNeeded}/{mission.QuantityRequested}");
                         
-                        ImGui.TableNextColumn();
-                        ImGui.Text(mission.IsHighQuality ? "Yes" : "No");
+                        ImGuiNET.ImGui.TableNextColumn();
+                        ImGuiNET.ImGui.Text(mission.IsHighQuality ? "Yes" : "No");
                     }
 
-                    ImGui.EndTable();
+                    ImGuiNET.ImGui.EndTable();
                 }
             }
             else
             {
-                ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "No missions scanned yet. Open the Grand Company Supply window and click 'Scan Supply Missions'.");
+                ImGuiNET.ImGui.TextColored(new Vector4(0.6f, 0.6f, 0.6f, 1.0f), "No missions scanned yet. Open the Grand Company Supply window and click 'Scan Supply Missions'.");
             }
 
-            ImGui.Spacing();
-            ImGui.Separator();
-            ImGui.Spacing();
+            ImGuiNET.ImGui.Spacing();
+            ImGuiNET.ImGui.Separator();
+            ImGuiNET.ImGui.Spacing();
 
             // Configuration options
-            ImGui.Text("Options:");
-            if (ImGui.Checkbox("Show Raw Materials Only", ref Plugin.Configuration.ShowRawMaterialsOnly))
+            ImGuiNET.ImGui.Text("Options:");
+            if (ImGuiNET.ImGui.Checkbox("Show Raw Materials Only", ref Plugin.Configuration.ShowRawMaterialsOnly))
             {
                 Plugin.Configuration.Save();
             }
 
-            if (ImGui.Checkbox("Include Gathering Locations", ref Plugin.Configuration.IncludeGatheringLocations))
+            if (ImGuiNET.ImGui.Checkbox("Include Gathering Locations", ref Plugin.Configuration.IncludeGatheringLocations))
             {
                 Plugin.Configuration.Save();
             }
