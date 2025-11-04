@@ -37,16 +37,23 @@ jobs:
           New-Item -ItemType Directory -Force -Path "$env:DALAMUD_HOME" | Out-Null
           Expand-Archive -Path latest.zip -DestinationPath "$env:DALAMUD_HOME" -Force
           Write-Host "Expanded: $env:DALAMUD_HOME"
-          Get-ChildItem "$env:DALAMUD_HOME\bin" | Select-Object FullName
+          # show what's inside (root and one level down)
+          Get-ChildItem "$env:DALAMUD_HOME" -Recurse -Depth 2 | Select-Object FullName
+
 
       - name: Build
         shell: pwsh
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $DalamudLibPath = (Join-Path "$env:DALAMUD_HOME" "bin\")
-          Write-Host "DalamudLibPath=$DalamudLibPath"
-          dotnet build ".\$env:PROJECT_FILE" -c Release /p:DalamudLibPath="$DalamudLibPath"
+          # Find the folder that contains Dalamud.dll
+          $dllHit = Get-ChildItem "$env:DALAMUD_HOME" -Recurse -Filter "Dalamud.dll" | Select-Object -First 1
+          if (-not $dllHit) { throw "Could not locate Dalamud.dll under $env:DALAMUD_HOME" }
+          $libDir = Split-Path -Parent $dllHit.FullName
+          if (-not $libDir.EndsWith('\')) { $libDir += '\' }
+          Write-Host "Using DalamudLibPath=$libDir"
+          dotnet build ".\$env:PROJECT_FILE" -c Release /p:DalamudLibPath="$libDir"
+
 
       - name: Verify Build Output
         shell: pwsh
