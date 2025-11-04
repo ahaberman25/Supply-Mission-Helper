@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using Dalamud.Plugin.Services;   // IGameGui, IDataManager, IPluginLog
+using Dalamud.Plugin.Services;
 
 namespace SupplyMissionHelper
 {
@@ -32,7 +32,9 @@ namespace SupplyMissionHelper
             {
                 try
                 {
-                    if (_gameGui.TryGetAddonByName(name, out var ptr) && ptr != nint.Zero)
+                    // v13: use GetAddonByName(name, index) and check for non-zero pointer
+                    var ptr = _gameGui.GetAddonByName(name, 1);
+                    if (ptr != nint.Zero)
                         return true;
                 }
                 catch (Exception ex)
@@ -55,6 +57,7 @@ namespace SupplyMissionHelper
 
             try
             {
+                // placeholder rows for end-to-end UI validation
                 results.Add(new MissionItem { ItemId = 1252, Name = "Ash Lumber", Quantity = 3 });
                 results.Add(new MissionItem { ItemId = 5333, Name = "Iron Ingot", Quantity = 2 });
 
