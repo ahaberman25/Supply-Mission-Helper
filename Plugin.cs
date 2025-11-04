@@ -1,4 +1,3 @@
-using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
@@ -7,53 +6,72 @@ namespace SupplyMissionHelper;
 
 public sealed class Plugin : IDalamudPlugin
 {
-    private const string CommandName = "/supplymission";
+    public string Name => "Supply Mission Helper";
 
-    public Configuration Configuration { get; init; }
-    public readonly WindowSystem WindowSystem = new("SupplyMissionHelper");
+    private readonly IDalamudPluginInterface _pi;
+    private readonly ICommandManager _commands;
+    private readonly IPluginLog _log;
+    private readonly IGameGui _gameGui;
+    private readonly IDataManager _data;
 
-    private IDalamudPluginInterface PluginInterface { get; init; }
-    private ICommandManager CommandManager { get; init; }
-    private MainWindow MainWindow { get; init; }
+    private readonly WindowSystem _windows = new("SupplyMissionHelper");
+    private readonly Configuration _config;
+    private readonly MainWindow _mainWindow;
 
     public Plugin(
         IDalamudPluginInterface pluginInterface,
         ICommandManager commandManager,
-        IDataManager dataManager,
-        IGameGui gameGui)
+        IPluginLog log,
+        IGameGui gameGui,
+        IDataManager dataManager)
     {
-        PluginInterface = pluginInterface;
-        CommandManager = commandManager;
+        _pi = pluginInterface;
+        _commands = commandManager;
+        _log = log;
+        _gameGui = gameGui;
+        _data = dataManager;
 
-        Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
-        Configuration.Initialize(PluginInterface);
+        _config = _pi.GetPluginConfig() as Configuration ?? new Configuration();
+        _config.Initialize(_pi);
 
-        MainWindow = new MainWindow(this);
-        WindowSystem.AddWindow(MainWindow);
+        // NEW: services
+        var scanner = new MissionScanner(_gameGui, _data, _log);
+        var calculator = new RecipeCalculator(_data, _log);
 
-        CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
+        // Window
+        _mainWindow = new MainWindow(_config, scanner, calculator);
+        _windows.AddWindow(_mainWindow);
+
+        // Slash command
+        _commands.AddHandler("/supplymission", new Dalamud.Game.Command.CommandInfo(OnCommand)
         {
             HelpMessage = "Open the Supply Mission Helper window"
         });
 
-        PluginInterface.UiBuilder.Draw += DrawUI;
-        PluginInterface.UiBuilder.OpenConfigUi += ToggleConfigUI;
-        PluginInterface.UiBuilder.OpenMainUi += ToggleConfigUI;
+        // Hooks
+        _pi.UiBuilder.Draw += DrawUI;
+        _pi.UiBuilder.OpenMainUi += ToggleMainWindow;
+        _pi.UiBuilder.OpenConfigUi += ToggleMainWindow;
+
+        _log.Info("Supply Mission Helper loaded.");
     }
+
+    private void OnCommand(string cmd, string args) => ToggleMainWindow();
+
+    private void ToggleMainWindow()
+    {
+        _mainWindow.IsOpen = !_mainWindow.IsOpen;
+    }
+
+    private void DrawUI() => _windows.Draw();
 
     public void Dispose()
     {
-        WindowSystem.RemoveAllWindows();
-        MainWindow.Dispose();
-        CommandManager.RemoveHandler(CommandName);
+        _windows.RemoveAllWindows();
+        _commands.RemoveHandler("/supplymission");
+        _pi.UiBuilder.Draw -= DrawUI;
+        _pi.UiBuilder.OpenMainUi -= ToggleMainWindow;
+        _pi.UiBuilder.OpenConfigUi -= ToggleMainWindow;
+        _log.Info("Supply Mission Helper disposed.");
     }
-
-    private void OnCommand(string command, string args)
-    {
-        ToggleConfigUI();
-    }
-
-    private void DrawUI() => WindowSystem.Draw();
-
-    private void ToggleConfigUI() => MainWindow.Toggle();
 }
