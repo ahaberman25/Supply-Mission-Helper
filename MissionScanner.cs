@@ -15,13 +15,10 @@ namespace SupplyMissionHelper
         private readonly IDataManager _data;
         private readonly IPluginLog _log;
 
-        // Primary: actual GC supply/provisioning list
-        private static readonly string[] PrimaryGcAddons = { "GrandCompanySupplyList" };
+        // On your client, the GC list is rendered inside ContentsInfoDetail.
+        private static readonly string[] TargetAddons = { "ContentsInfoDetail" };
 
-        // Things we detect but don't parse (dashboard etc.)
-        private static readonly string[] KnownDashboards = { "ContentsInfoDetail", "ContentsInfo" };
-
-        // Static labels we should ignore
+        // Static labels we should ignore as headers
         private static readonly string[] HeaderKeywords =
         {
             "Supply Missions", "Provisioning Missions", "Requested", "Qty.", "Close"
@@ -36,45 +33,53 @@ namespace SupplyMissionHelper
             _log = log;
         }
 
-        public bool IsSupplyWindowOpen() => GetAddonPtr(PrimaryGcAddons) != nint.Zero;
+        public bool IsSupplyWindowOpen()
+        {
+            var ptr = GetAddonPtr(TargetAddons);
+            if (ptr == nint.Zero) return false;
+
+            unsafe
+            {
+                var unit = (AtkUnitBase*)ptr;
+                var texts = CollectWindowText(unit);
+                return LooksLikeGcSupplyProvisioning(texts);
+            }
+        }
 
         public List<MissionItem> TryReadMissions(out string? status)
         {
             status = null;
             var results = new List<MissionItem>();
 
-            var gcPtr = GetAddonPtr(PrimaryGcAddons);
-            if (gcPtr == nint.Zero)
+            var ptr = GetAddonPtr(TargetAddons);
+            if (ptr == nint.Zero)
             {
-                // Friendly hint if the dashboard is open instead
-                if (GetAddonPtr(KnownDashboards) != nint.Zero)
-                {
-                    status = "Detected the Contents Info dashboard. Open GC Personnel Officer → “Supply & Provisioning Missions”.";
-                    return results;
-                }
-
                 status = "Supply Mission list not detected. Open GC “Supply & Provisioning Missions”.";
                 return results;
             }
 
             unsafe
             {
-                var unit = (AtkUnitBase*)gcPtr;
+                var unit = (AtkUnitBase*)ptr;
                 if (unit == null || unit->UldManager.NodeListCount == 0)
                 {
-                    status = "GC list detected, but no nodes were found.";
+                    status = "UI detected, but no nodes were found.";
                     return results;
                 }
 
-                // Collect ALL visible text from the window once, top-to-bottom.
                 var allTexts = CollectWindowText(unit);
                 if (allTexts.Count == 0)
                 {
-                    status = "GC list detected, but no text was readable.";
+                    status = "UI detected, but no text was readable.";
                     return results;
                 }
 
-                // Capped state short-circuit
+                if (!LooksLikeGcSupplyProvisioning(allTexts))
+                {
+                    status = "Contents window is open, but it isn’t the GC Supply & Provisioning view.";
+                    return results;
+                }
+
                 if (allTexts.Any(x => x.Contains("No more deliveries are being accepted today", StringComparison.OrdinalIgnoreCase)))
                 {
                     status = "No missions available today.";
@@ -84,36 +89,50 @@ namespace SupplyMissionHelper
                 // Filter obvious headers/static labels
                 var filtered = allTexts.Where(t => !IsHeaderish(t)).ToList();
 
-                // Parse rows heuristically:
-                //  - a "name-like" line (longer, non-numeric, not "N/M")
-                //  - followed by a small positive integer (Requested)
-                // We ignore the "Qty." column ("0/0" style fractions) for now.
+                // State machine: we’re either in Supply, Provisioning, or None
+                var section = Section.None;
                 string? currentName = null;
+
+                foreach (var t in allTexts)
+                {
+                    // Track section by raw stream (not filtered) so we don’t miss boundaries.
+                    if (t.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase)) { section = Section.Supply; currentName = null; continue; }
+                    if (t.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase)) { section = Section.Provisioning; currentName = null; continue; }
+                }
+
+                // Now parse from filtered stream so we skip the headers/labels.
+                section = Section.None;
+                currentName = null;
+
                 foreach (var t in filtered)
                 {
-                    if (LooksLikeFraction(t))             // "0/20" etc. (Qty. column) – skip for now
-                        continue;
+                    // Section changes still possible if the labels survived filtering (defensive)
+                    if (t.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase))        { section = Section.Supply; currentName = null; continue; }
+                    if (t.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase)) { section = Section.Provisioning; currentName = null; continue; }
 
-                    if (TryParseInt(t, out var asInt))    // a number-only line
+                    // Skip Qty column (e.g., "0/20")
+                    if (LooksLikeFraction(t)) continue;
+
+                    // If it's an integer, treat it as the Requested qty for the active row
+                    if (TryParseInt(t, out var asInt))
                     {
-                        if (asInt > 0 && !string.IsNullOrEmpty(currentName))
+                        if (asInt > 0 && !string.IsNullOrEmpty(currentName) && section != Section.None)
                         {
                             results.Add(new MissionItem
                             {
-                                Name = currentName,
+                                Name     = currentName,
                                 Quantity = asInt,
-                                ItemId = 0 // later: resolve via Lumina Item sheet by name
+                                ItemId   = 0, // later: resolve via Lumina Item sheet by name
                             });
-                            currentName = null;            // reset for next row
+                            currentName = null;
                         }
                         continue;
                     }
 
-                    // Otherwise treat as a candidate name
+                    // Otherwise, treat as a name fragment
                     if (IsLikelyName(t))
                     {
-                        // If we had a previous name that never picked up a number,
-                        // just keep the longer of the two (handles wrapped names)
+                        // Names can wrap: keep the longer string as the name for this row
                         if (string.IsNullOrEmpty(currentName) || t.Length > currentName.Length)
                             currentName = t;
                     }
@@ -121,18 +140,18 @@ namespace SupplyMissionHelper
 
                 if (results.Count == 0)
                 {
-                    status = "GC list parsed, but no rows matched (maybe capped or UI variant).";
+                    status = "Parsed the GC view, but found no (name, requested) rows (possibly capped or UI variant).";
                     return results;
                 }
 
-                // Merge any duplicates (shouldn't really happen, but safe)
+                // Merge duplicates by name just in case
                 results = results
                     .GroupBy(r => r.Name ?? string.Empty)
                     .Select(g => new MissionItem
                     {
-                        Name = g.Key,
+                        Name     = g.Key,
                         Quantity = g.Sum(x => x.Quantity),
-                        ItemId = 0
+                        ItemId   = 0
                     })
                     .ToList();
 
@@ -141,7 +160,7 @@ namespace SupplyMissionHelper
             }
         }
 
-        // ---------- helpers (no pointer-type generic args; compiles cleanly) ----------
+        // ---------------- helpers ----------------
 
         private nint GetAddonPtr(IEnumerable<string> names)
         {
@@ -149,12 +168,22 @@ namespace SupplyMissionHelper
             {
                 try
                 {
-                    var ptr = _gameGui.GetAddonByName(n, 1);
-                    if (ptr != nint.Zero) return ptr;
+                    // Try both indices; some variants bind at 0
+                    var p1 = _gameGui.GetAddonByName(n, 1);
+                    if (p1 != nint.Zero) return p1;
+                    var p0 = _gameGui.GetAddonByName(n, 0);
+                    if (p0 != nint.Zero) return p0;
                 }
                 catch { /* ignore */ }
             }
             return nint.Zero;
+        }
+
+        private static bool LooksLikeGcSupplyProvisioning(IReadOnlyList<string> texts)
+        {
+            var hasSupply = texts.Any(t => t.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase));
+            var hasProv   = texts.Any(t => t.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase));
+            return hasSupply && hasProv;
         }
 
         private static bool IsHeaderish(string s)
@@ -179,7 +208,7 @@ namespace SupplyMissionHelper
             if (s.Length <= 1) return false;
             if (LooksLikeFraction(s)) return false;
             if (TryParseInt(s, out _)) return false;
-            // very small label-like tokens to exclude
+            // exclude tiny label-like tokens
             if (s.Equals("A", StringComparison.OrdinalIgnoreCase) ||
                 s.Equals("B", StringComparison.OrdinalIgnoreCase) ||
                 s.Equals("C", StringComparison.OrdinalIgnoreCase))
@@ -191,7 +220,7 @@ namespace SupplyMissionHelper
         {
             var list = new List<string>();
 
-            // Walk flattened NodeList; skip nulls; take any Text node.
+            // Walk flattened NodeList and take all Text nodes (no visibility checks needed)
             for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
                 var node = unit->UldManager.NodeList[i];
@@ -211,6 +240,7 @@ namespace SupplyMissionHelper
             return list;
         }
 
+        private enum Section { None, Supply, Provisioning }
     }
 
     public sealed class MissionItem
