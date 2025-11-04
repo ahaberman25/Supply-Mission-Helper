@@ -7,6 +7,7 @@
     <Description>Calculate materials needed for Grand Company Supply Missions</Description>
     <PackageProjectUrl>https://github.com/ahaberman25/Supply-Mission-Helper</PackageProjectUrl>
 
+    <!-- v13 targets .NET 9 -->
     <TargetFramework>net9.0-windows</TargetFramework>
     <Platforms>x64</Platforms>
     <Nullable>enable</Nullable>
@@ -15,12 +16,4 @@
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
-
-  <!-- Keep the project clean: don't let accidental local DLLs sneak in -->
-  <ItemGroup>
-    <Reference Remove="*" />
-    <None Remove="dalamud\**\*" />
-    <Content Remove="dalamud\**\*" />
-    <EmbeddedResource Remove="dalamud\**\*" />
-  </ItemGroup>
 </Project>
