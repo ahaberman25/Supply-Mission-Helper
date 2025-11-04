@@ -297,7 +297,8 @@ namespace SupplyMissionHelper
             return true;
         }
 
-        private static void ParseRowCandidates(IEnumerable<RowCandidate> rows, string section, List<MissionItem> sink)
+        private void ParseRowCandidates(IEnumerable<RowCandidate> rows, string section, List<MissionItem> sink)
+
         {
             foreach (var rc in rows)
             {
