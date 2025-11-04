@@ -7,14 +7,34 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace SupplyMissionHelper
 {
+    /// <summary>
+    /// Scans the GC "Supply & Provisioning Missions" (ContentsInfoDetail) window.
+    /// Uses stable NodeIds for headers/rows and fixed child indices per row:
+    ///   - child #4  = item name
+    ///   - child #7  = requested amount
+    ///   - child #8  = on-hand amount
+    /// </summary>
     public sealed unsafe class MissionScanner
     {
         private readonly IGameGui _gameGui;
-        private readonly IDataManager _data; // reserved for future Item/Recipe lookups
+        private readonly IDataManager _data;   // reserved for future Lumina lookups
         private readonly IPluginLog _log;
 
-        // Your client renders the GC list inside this addon.
+        // The GC mission list lives inside this addon.
         private static readonly string[] TargetAddons = { "ContentsInfoDetail" };
+
+        // Header TextNode NodeIds (stable per your inspection)
+        private const uint SUPPLY_HEADER_NODEID       = 3u;   // "Supply Missions"
+        private const uint PROVISIONING_HEADER_NODEID = 16u;  // "Provisioning Missions"
+
+        // Row Base Component NodeIds (stable per your inspection)
+        private static readonly uint[] SUPPLY_ROW_NODEIDS       = { 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u };
+        private static readonly uint[] PROVISIONING_ROW_NODEIDS = { 17u, 18u, 19u };
+
+        // Child text indices inside a row component
+        private const int CHILD_INDEX_NAME      = 4;
+        private const int CHILD_INDEX_REQUESTED = 7;
+        private const int CHILD_INDEX_ONHAND    = 8;
 
         public bool IsReady => _gameGui is not null && _data is not null;
 
@@ -57,38 +77,38 @@ namespace SupplyMissionHelper
             }
 
             var unit = (AtkUnitBase*)ptr;
-            if (unit == null || unit->UldManager.NodeListCount == 0 || unit->UldManager.NodeList == null)
+            if (unit == null || unit->UldManager.NodeList == null || unit->UldManager.NodeListCount == 0)
             {
                 status = "UI detected, but node list was empty.";
                 return results;
             }
 
-            // Locate section headers by text (stable across clients)
-            if (!TryFindHeaderIndices(unit, out var supplyHeaderIdx, out var provisioningHeaderIdx))
-            {
-                status = "GC window found, but headers not found (UI variant?).";
-                return results;
-            }
+            // Try to locate headers (for better status/diagnostics). Not strictly required for parsing.
+            var haveHeaders = TryFindHeaderIndices(unit, out var supplyHeaderIdx, out var provisioningHeaderIdx);
 
-            // Collect row components between the headers
-            var supplyRows       = CollectRowComponentsBetween(unit, supplyHeaderIdx, provisioningHeaderIdx);
-            var provisioningRows = CollectRowComponentsBetween(unit, provisioningHeaderIdx, unit->UldManager.NodeListCount);
+            // Gather rows by NodeId (robust, avoids layout guessing)
+            var supplyRows       = CollectRowComponentsByNodeId(unit, SUPPLY_ROW_NODEIDS);
+            var provisioningRows = CollectRowComponentsByNodeId(unit, PROVISIONING_ROW_NODEIDS);
 
+            _log.Info($"[SMH] Found {supplyRows.Count} supply-row nodes and {provisioningRows.Count} provisioning-row nodes by NodeId. HeadersFound={haveHeaders}");
 
-            // Parse with precise child indices (name=#4, requested=#7, onHand=#8)
+            // Parse each row into Name / Requested / OnHand
             ParseRowComponents(supplyRows, "Supply", results);
             ParseRowComponents(provisioningRows, "Provisioning", results);
 
             if (results.Count == 0)
             {
+                // Prefer an explicit capped message if present
                 if (WindowContains(unit, "No more deliveries are being accepted today"))
                     status = "No missions available today.";
+                else if (!haveHeaders)
+                    status = "GC view detected, but section headers not found (UI variant?).";
                 else
-                    status = "GC view detected, but no rows were parsed (layout changed?).";
+                    status = "No active mission rows detected (likely daily cap or empty).";
                 return results;
             }
 
-            // Merge dupes defensively
+            // Merge duplicates defensively
             results = results
                 .GroupBy(r => r.Name ?? string.Empty)
                 .Select(g => new MissionItem
@@ -105,34 +125,27 @@ namespace SupplyMissionHelper
             return results;
         }
 
-        // ---------- internals ----------
+        // ----------------- internals -----------------
 
-        // At top of the class (near fields), you can keep these constants:
-        private const ushort SUPPLY_HEADER_NODEID       = 3;   // "Supply Missions"
-        private const ushort PROVISIONING_HEADER_NODEID = 16;  // "Provisioning Missions"
-
-        private static unsafe bool TryFindHeaderIndices(AtkUnitBase* unit,
-            out int supplyHeaderIdx, out int provisioningHeaderIdx)
+        private static bool TryFindHeaderIndices(AtkUnitBase* unit, out int supplyHeaderIdx, out int provisioningHeaderIdx)
         {
             supplyHeaderIdx = -1;
             provisioningHeaderIdx = -1;
 
-            // 1) Prefer exact NodeId match (stable across clients)
+            // Prefer exact NodeId matches (most stable)
             for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
                 var node = unit->UldManager.NodeList[i];
                 if (node == null || node->Type != NodeType.Text) continue;
 
-                // NOTE: field name is NodeId
-                ushort id = (ushort)node->NodeId;
-
+                uint id = node->NodeId;
                 if (id == SUPPLY_HEADER_NODEID)
                     supplyHeaderIdx = i;
                 else if (id == PROVISIONING_HEADER_NODEID)
                     provisioningHeaderIdx = i;
             }
 
-            // 2) Fallback to text matching if NodeIds weren’t found
+            // Fallback to text matching (future-proof, different locales may need localization)
             if (supplyHeaderIdx < 0 || provisioningHeaderIdx < 0)
             {
                 for (var i = 0; i < unit->UldManager.NodeListCount; i++)
@@ -154,46 +167,32 @@ namespace SupplyMissionHelper
                 }
             }
 
+            // Ensure order supply < provisioning
             if (supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0 &&
                 supplyHeaderIdx > provisioningHeaderIdx)
+            {
                 (supplyHeaderIdx, provisioningHeaderIdx) = (provisioningHeaderIdx, supplyHeaderIdx);
+            }
 
             return supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0;
         }
 
-
-
-        private static List<nint> CollectRowComponentsBetween(AtkUnitBase* unit, int startExclusive, int endExclusive)
+        private static List<nint> CollectRowComponentsByNodeId(AtkUnitBase* unit, IReadOnlyCollection<uint> wantedNodeIds)
         {
             var rows = new List<nint>();
-            var max  = unit->UldManager.NodeListCount;
+            if (unit->UldManager.NodeList == null || unit->UldManager.NodeListCount == 0) return rows;
 
-            startExclusive = Math.Clamp(startExclusive, -1, max);
-            endExclusive   = Math.Clamp(endExclusive, 0,  max);
-
-            for (var i = startExclusive + 1; i < endExclusive; i++)
+            for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
                 var node = unit->UldManager.NodeList[i];
-                if (node == null) continue;
+                if (node == null || node->Type != NodeType.Component) continue;
 
-                // stop if another header text is encountered
-                if (node->Type == NodeType.Text)
-                {
-                    var t = (AtkTextNode*)node;
-                    if (t->NodeText.StringPtr != null)
-                    {
-                        var s = t->NodeText.ToString().Trim();
-                        if (s.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase) ||
-                            s.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase))
-                            break;
-                    }
-                }
+                if (!wantedNodeIds.Contains(node->NodeId)) continue;
 
-                if (node->Type != NodeType.Component) continue;
                 var compNode = (AtkComponentNode*)node;
                 if (compNode->Component == null) continue;
 
-                rows.Add((nint)compNode); // store the pointer as nint
+                rows.Add((nint)compNode);
             }
 
             return rows;
@@ -204,22 +203,24 @@ namespace SupplyMissionHelper
             foreach (var rowPtr in rows)
             {
                 var compNode = (AtkComponentNode*)rowPtr;   // cast back to pointer
-                var comp = compNode->Component;
-                var uld  = comp->UldManager;
+                if (compNode == null || compNode->Component == null) continue;
+
+                var uld = compNode->Component->UldManager;
                 if (uld.NodeList == null || uld.NodeListCount == 0) continue;
 
                 string? name = null;
                 int requested = 0;
                 int onHand = 0;
 
-                ReadTextAt(uld, 4, out var nameCandidate);
+                // Read fixed child indices (fast path)
+                ReadTextAt(uld, CHILD_INDEX_NAME, out var nameCandidate);
                 if (!string.IsNullOrWhiteSpace(nameCandidate))
                     name = nameCandidate!.Trim();
 
-                if (TryReadIntAt(uld, 7, out var req))  requested = req;
-                if (TryReadIntAt(uld, 8, out var have)) onHand   = have;
+                if (TryReadIntAt(uld, CHILD_INDEX_REQUESTED, out var req)) requested = req;
+                if (TryReadIntAt(uld, CHILD_INDEX_ONHAND, out var have))   onHand   = have;
 
-                // Fallback scan if needed
+                // Fallback: scan all text nodes if needed (handles slight layout shifts)
                 if (name is null || requested == 0)
                 {
                     for (var j = 0; j < uld.NodeListCount; j++)
@@ -232,18 +233,23 @@ namespace SupplyMissionHelper
 
                         var s = t->NodeText.ToString().Trim();
                         if (string.IsNullOrWhiteSpace(s)) continue;
+
+                        // Ignore the fraction column like "0/20"
                         if (LooksLikeFraction(s)) continue;
 
                         if (requested == 0 && IsNumeric(s) &&
                             int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
                         {
-                            requested = iv; continue;
+                            requested = iv;
+                            continue;
                         }
 
-                        if (name is null || s.Length > name.Length) name = s;
+                        if (name is null || s.Length > name.Length)
+                            name = s;
                     }
                 }
 
+                // If on-hand still unknown, try to infer another clean int different from requested
                 if (onHand == 0)
                 {
                     for (var j = 0; j < uld.NodeListCount; j++)
@@ -278,24 +284,6 @@ namespace SupplyMissionHelper
             }
         }
 
-        private static bool WindowContains(AtkUnitBase* unit, string needle)
-        {
-            for (var i = 0; i < unit->UldManager.NodeListCount; i++)
-            {
-                var node = unit->UldManager.NodeList[i];
-                if (node == null || node->Type != NodeType.Text) continue;
-
-                var t = (AtkTextNode*)node;
-                if (t->NodeText.StringPtr == null) continue;
-
-                var s = t->NodeText.ToString();
-                if (!string.IsNullOrEmpty(s) &&
-                    s.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
-                    return true;
-            }
-            return false;
-        }
-
         private static void ReadTextAt(AtkUldManager uld, int index, out string? text)
         {
             text = null;
@@ -320,6 +308,24 @@ namespace SupplyMissionHelper
             return int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
         }
 
+        private static bool WindowContains(AtkUnitBase* unit, string needle)
+        {
+            for (var i = 0; i < unit->UldManager.NodeListCount; i++)
+            {
+                var node = unit->UldManager.NodeList[i];
+                if (node == null || node->Type != NodeType.Text) continue;
+
+                var t = (AtkTextNode*)node;
+                if (t->NodeText.StringPtr == null) continue;
+
+                var s = t->NodeText.ToString();
+                if (!string.IsNullOrEmpty(s) &&
+                    s.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
+                    return true;
+            }
+            return false;
+        }
+
         private static bool LooksLikeFraction(string s)
         {
             var slash = s.IndexOf('/');
@@ -336,7 +342,7 @@ namespace SupplyMissionHelper
 
     public sealed class MissionItem
     {
-        public string? Name { get; set; }
+        public string? Name   { get; set; }
         public int     Quantity { get; set; } // requested
         public int     OnHand   { get; set; } // how many you currently have
         public uint    ItemId   { get; set; } // future: Lumina lookup
