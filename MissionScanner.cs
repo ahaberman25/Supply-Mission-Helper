@@ -191,15 +191,11 @@ namespace SupplyMissionHelper
         {
             var list = new List<string>();
 
-            // Walk the NodeList (which is already a flattened, z-ordered list).
+            // Walk flattened NodeList; skip nulls; take any Text node.
             for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
                 var node = unit->UldManager.NodeList[i];
                 if (node == null) continue;
-
-                // Do a cheap visibility check using the node flags (no extension methods needed).
-                // Bit 0x20 (32) is the "Visible" flag in AtkResNode flags.
-                if ((node->Flags & 0x20) == 0) continue;
 
                 if (node->Type == NodeType.Text)
                 {
@@ -214,6 +210,7 @@ namespace SupplyMissionHelper
 
             return list;
         }
+
     }
 
     public sealed class MissionItem
