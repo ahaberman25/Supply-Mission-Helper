@@ -80,40 +80,22 @@ namespace SupplyMissionHelper
                     return results;
                 }
 
-                if (allTexts.Any(x => x.Contains("No more deliveries are being accepted today", StringComparison.OrdinalIgnoreCase)))
-                {
-                    status = "No missions available today.";
-                    return results;
-                }
-
                 // Filter obvious headers/static labels
                 var filtered = allTexts.Where(t => !IsHeaderish(t)).ToList();
 
-                // State machine: we’re either in Supply, Provisioning, or None
+                // Parse rows: Name (string) → Requested (int). Ignore the "0/20" Qty column.
                 var section = Section.None;
                 string? currentName = null;
 
-                foreach (var t in allTexts)
-                {
-                    // Track section by raw stream (not filtered) so we don’t miss boundaries.
-                    if (t.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase)) { section = Section.Supply; currentName = null; continue; }
-                    if (t.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase)) { section = Section.Provisioning; currentName = null; continue; }
-                }
-
-                // Now parse from filtered stream so we skip the headers/labels.
-                section = Section.None;
-                currentName = null;
-
+                // Re-establish section as we walk the filtered stream (defensive).
                 foreach (var t in filtered)
                 {
-                    // Section changes still possible if the labels survived filtering (defensive)
                     if (t.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase))        { section = Section.Supply; currentName = null; continue; }
                     if (t.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase)) { section = Section.Provisioning; currentName = null; continue; }
 
-                    // Skip Qty column (e.g., "0/20")
+                    // Skip Qty fraction (e.g., "0/20")
                     if (LooksLikeFraction(t)) continue;
 
-                    // If it's an integer, treat it as the Requested qty for the active row
                     if (TryParseInt(t, out var asInt))
                     {
                         if (asInt > 0 && !string.IsNullOrEmpty(currentName) && section != Section.None)
@@ -122,17 +104,16 @@ namespace SupplyMissionHelper
                             {
                                 Name     = currentName,
                                 Quantity = asInt,
-                                ItemId   = 0, // later: resolve via Lumina Item sheet by name
+                                ItemId   = 0,
                             });
                             currentName = null;
                         }
                         continue;
                     }
 
-                    // Otherwise, treat as a name fragment
                     if (IsLikelyName(t))
                     {
-                        // Names can wrap: keep the longer string as the name for this row
+                        // Names can wrap; keep the longest piece seen for this row
                         if (string.IsNullOrEmpty(currentName) || t.Length > currentName.Length)
                             currentName = t;
                     }
@@ -140,11 +121,17 @@ namespace SupplyMissionHelper
 
                 if (results.Count == 0)
                 {
-                    status = "Parsed the GC view, but found no (name, requested) rows (possibly capped or UI variant).";
+                    // Only now consider the capped message.
+                    var hasCappedText = allTexts.Any(x =>
+                        x.Contains("No more deliveries are being accepted today", StringComparison.OrdinalIgnoreCase));
+
+                    status = hasCappedText
+                        ? "No missions available today."
+                        : "GC view detected, but no rows were parsed (UI variant or layout changed).";
                     return results;
                 }
 
-                // Merge duplicates by name just in case
+                // Merge duplicates by name (safety)
                 results = results
                     .GroupBy(r => r.Name ?? string.Empty)
                     .Select(g => new MissionItem
@@ -159,6 +146,7 @@ namespace SupplyMissionHelper
                 return results;
             }
         }
+
 
         // ---------------- helpers ----------------
 
