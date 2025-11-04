@@ -40,11 +40,6 @@ jobs:
         run: |
           $version = "${{ github.ref_name }}".TrimStart('v')
           
-          # Update manifest version
-          $manifest = Get-Content "SupplyMissionHelper.json" -Raw | ConvertFrom-Json
-          $manifest.AssemblyVersion = $version
-          $manifest | ConvertTo-Json -Depth 10 | Set-Content "SupplyMissionHelper.json"
-          
           # Create package
           New-Item -ItemType Directory -Force -Path "release"
           Copy-Item "bin/Release/net9.0-windows/SupplyMissionHelper.dll" -Destination "release/"
