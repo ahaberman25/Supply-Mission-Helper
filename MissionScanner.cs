@@ -8,7 +8,7 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace SupplyMissionHelper
 {
-    public sealed class MissionScanner
+    public sealed partial class MissionScanner
     {
         private readonly IGameGui _gameGui;
         private readonly IDataManager _data;
