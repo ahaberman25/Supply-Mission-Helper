@@ -62,97 +62,74 @@ namespace SupplyMissionHelper
             return false;
         }
 
-        public List<MissionItem> TryReadMissions(out string status)
+       public List<MissionItem> TryReadMissions(out string status)
+{
+    status = string.Empty;
+    var results = new List<MissionItem>();
+
+    // Bind to ContentsInfoDetail
+    nint ptr = nint.Zero;
+    foreach (var n in TargetAddons)
+    {
+        ptr = _gameGui.GetAddonByName(n, 1);
+        if (ptr == nint.Zero) ptr = _gameGui.GetAddonByName(n, 0);
+        if (ptr != nint.Zero) break;
+    }
+    if (ptr == nint.Zero)
+    {
+        status = "Supply Mission list not detected.";
+        return results;
+    }
+
+    var unit = (AtkUnitBase*)ptr;
+    if (unit == null || unit->UldManager.NodeList == null)
+    {
+        status = "Empty node list.";
+        return results;
+    }
+
+    _log.Info($"[SMH-DUMP] NodeListCount={unit->UldManager.NodeListCount}");
+
+    // Dump every component node to the log
+    for (int i = 0; i < unit->UldManager.NodeListCount; i++)
+    {
+        var node = unit->UldManager.NodeList[i];
+        if (node == null) continue;
+
+        if (node->Type == NodeType.Component)
         {
-            status = string.Empty;
-            var results = new List<MissionItem>();
+            var comp = (AtkComponentNode*)node;
+            var uld = comp->Component != null ? &comp->Component->UldManager : null;
+            var childCount = uld != null ? uld->NodeListCount : 0;
 
-            // Bind to ContentsInfoDetail
-            nint ptr = nint.Zero;
-            foreach (var n in TargetAddons)
+            // Try to grab text from a few child nodes (to identify rows)
+            List<string> childTexts = new();
+            if (uld != null && uld->NodeList != null)
             {
-                ptr = _gameGui.GetAddonByName(n, 1);
-                if (ptr == nint.Zero) ptr = _gameGui.GetAddonByName(n, 0);
-                if (ptr != nint.Zero) break;
-            }
-            if (ptr == nint.Zero)
-            {
-                status = "Supply Mission list not detected. Open GC “Supply & Provisioning Missions”.";
-                return results;
-            }
-
-            var unit = (AtkUnitBase*)ptr;
-            if (unit == null || unit->UldManager.NodeList == null || unit->UldManager.NodeListCount == 0)
-            {
-                status = "UI detected, but node list was empty.";
-                return results;
-            }
-
-            // Find headers (we use them for heuristic bounds + better status)
-            var haveHeaders = TryFindHeaderIndices(unit, out var supplyHeaderIdx, out var provisioningHeaderIdx);
-
-            // 1) Try NodeId-anchored rows if arrays are populated
-            var supplyRows = SUPPLY_ROW_NODEIDS.Length > 0
-                ? CollectRowComponentsByNodeId(unit, SUPPLY_ROW_NODEIDS)
-                : new List<nint>();
-
-            var provisioningRows = PROVISIONING_ROW_NODEIDS.Length > 0
-                ? CollectRowComponentsByNodeId(unit, PROVISIONING_ROW_NODEIDS)
-                : new List<nint>();
-
-            _log.Info($"[SMH] NodeId path found {supplyRows.Count} supply rows, {provisioningRows.Count} provisioning rows. HeadersFound={haveHeaders}");
-
-            // 2) Heuristic fallback if NodeId path yields nothing
-            if (supplyRows.Count == 0 || provisioningRows.Count == 0)
-            {
-                if (haveHeaders)
+                for (int j = 0; j < Math.Min(10, uld->NodeListCount); j++)
                 {
-                    var hSupply = supplyHeaderIdx;
-                    var hProv   = provisioningHeaderIdx;
-
-                    if (supplyRows.Count == 0)
-                        supplyRows = CollectRowComponentsHeuristic(unit, hSupply, hProv, "Supply");
-
-                    if (provisioningRows.Count == 0)
-                        provisioningRows = CollectRowComponentsHeuristic(unit, hProv, unit->UldManager.NodeListCount, "Provisioning");
-                }
-                else
-                {
-                    _log.Info("[SMH] Headers not found — unable to run heuristic row discovery.");
+                    var c = uld->NodeList[j];
+                    if (c != null && c->Type == NodeType.Text)
+                    {
+                        var t = (AtkTextNode*)c;
+                        if (t->NodeText.StringPtr != null)
+                        {
+                            var s = t->NodeText.ToString().Trim();
+                            if (!string.IsNullOrEmpty(s))
+                                childTexts.Add(s);
+                        }
+                    }
                 }
             }
 
-            // Parse rows
-            ParseRowComponents(supplyRows, "Supply", results);
-            ParseRowComponents(provisioningRows, "Provisioning", results);
-
-            if (results.Count == 0)
-            {
-                if (WindowContains(unit, "No more deliveries are being accepted today"))
-                    status = "No missions available today.";
-                else if (!haveHeaders)
-                    status = "GC view detected, but section headers not found (UI variant?).";
-                else
-                    status = "No active mission rows detected (UI layout variant or daily cap).";
-                return results;
-            }
-
-            // Merge duplicates defensively
-            results = results
-                .GroupBy(r => r.Name ?? string.Empty)
-                .Select(g => new MissionItem
-                {
-                    Name     = g.Key,
-                    Quantity = g.Sum(x => x.Quantity),
-                    OnHand   = g.Sum(x => x.OnHand),
-                    ItemId   = 0,
-                    Section  = g.First().Section
-                })
-                .ToList();
-
-            status = $"Parsed {results.Count} mission item(s).";
-            return results;
+            _log.Info($"[SMH-DUMP] Node[{i}] Comp NodeId={node->NodeId}, Children={childCount}, Texts=[{string.Join(", ", childTexts)}]");
         }
+    }
+
+    status = "Dump complete (check log for [SMH-DUMP] entries)";
+    return results;
+}
+
 
         // ----------------- internals -----------------
 
