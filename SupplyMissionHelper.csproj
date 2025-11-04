@@ -3,9 +3,8 @@
   <PropertyGroup>
     <Authors>ahaberman25</Authors>
     <Company>ahaberman25</Company>
-    <Version>0.0.1</Version>
-    <Description>A plugin to help calculate materials needed for Grand Company Supply Missions</Description>
-    <Copyright>Copyright © 2024 ahaberman25</Copyright>
+    <Version>1.0.0</Version>
+    <Description>Calculate materials needed for Grand Company Supply Missions</Description>
     <PackageProjectUrl>https://github.com/ahaberman25/Supply-Mission-Helper</PackageProjectUrl>
   </PropertyGroup>
 
@@ -17,7 +16,6 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
   <PropertyGroup>
@@ -33,12 +31,8 @@
       <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="Dalamud.Bindings.ImGui">
-      <HintPath>$(DalamudLibPath)Dalamud.Bindings.ImGui.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="ImGuiScene">
-      <HintPath>$(DalamudLibPath)ImGuiScene.dll</HintPath>
+    <Reference Include="ImGui.NET">
+      <HintPath>$(DalamudLibPath)ImGui.NET.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="Lumina">
@@ -51,10 +45,6 @@
     </Reference>
     <Reference Include="FFXIVClientStructs">
       <HintPath>$(DalamudLibPath)FFXIVClientStructs.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
-    <Reference Include="InteropGenerator.Runtime">
-      <HintPath>$(DalamudLibPath)InteropGenerator.Runtime.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

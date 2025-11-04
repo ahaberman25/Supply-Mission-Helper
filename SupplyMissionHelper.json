@@ -1,8 +1,8 @@
 {
-  "Author": "YourName",
+  "Author": "ahaberman25",
   "Name": "Supply Mission Helper",
   "Punchline": "Calculate materials needed for Grand Company Supply Missions",
-  "Description": "This plugin scans your daily Grand Company Supply Missions and provides a comprehensive list of all materials needed to complete them, including raw materials for crafting.",
+  "Description": "This plugin helps you track and calculate materials needed for your daily Grand Company Supply Missions.",
   "InternalName": "SupplyMissionHelper",
   "ApplicableVersion": "any",
   "Tags": [

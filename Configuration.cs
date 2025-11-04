@@ -2,29 +2,26 @@ using Dalamud.Configuration;
 using Dalamud.Plugin;
 using System;
 
-namespace SupplyMissionHelper
+namespace SupplyMissionHelper;
+
+[Serializable]
+public class Configuration : IPluginConfiguration
 {
-    [Serializable]
-    public class Configuration : IPluginConfiguration
+    public int Version { get; set; } = 0;
+
+    public bool ShowRawMaterialsOnly { get; set; } = true;
+    public bool IncludeGatheringLocations { get; set; } = false;
+
+    [NonSerialized]
+    private IDalamudPluginInterface? pluginInterface;
+
+    public void Initialize(IDalamudPluginInterface pluginInterface)
     {
-        public int Version { get; set; } = 0;
+        this.pluginInterface = pluginInterface;
+    }
 
-        // Add your configuration properties here
-        public bool ShowRawMaterialsOnly { get; set; } = true;
-        public bool IncludeGatheringLocations { get; set; } = false;
-
-        // the below exist just to make saving less cumbersome
-        [NonSerialized]
-        private IDalamudPluginInterface? PluginInterface;
-
-        public void Initialize(IDalamudPluginInterface pluginInterface)
-        {
-            this.PluginInterface = pluginInterface;
-        }
-
-        public void Save()
-        {
-            this.PluginInterface!.SavePluginConfig(this);
-        }
+    public void Save()
+    {
+        this.pluginInterface!.SavePluginConfig(this);
     }
 }
