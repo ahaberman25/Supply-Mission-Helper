@@ -117,14 +117,14 @@ namespace SupplyMissionHelper
             supplyHeaderIdx = -1;
             provisioningHeaderIdx = -1;
 
-            // 1) Prefer exact NodeID match (stable across machines)
+            // 1) Prefer exact NodeId match (stable across clients)
             for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
                 var node = unit->UldManager.NodeList[i];
                 if (node == null || node->Type != NodeType.Text) continue;
 
-                // NodeID is on AtkResNode
-                var id = node->NodeID;
+                // NOTE: field name is NodeId
+                ushort id = node->NodeId;
 
                 if (id == SUPPLY_HEADER_NODEID)
                     supplyHeaderIdx = i;
@@ -132,7 +132,7 @@ namespace SupplyMissionHelper
                     provisioningHeaderIdx = i;
             }
 
-            // 2) Fallback to text matching if NodeIDs weren’t found (future-proof)
+            // 2) Fallback to text matching if NodeIds weren’t found
             if (supplyHeaderIdx < 0 || provisioningHeaderIdx < 0)
             {
                 for (var i = 0; i < unit->UldManager.NodeListCount; i++)
@@ -154,13 +154,13 @@ namespace SupplyMissionHelper
                 }
             }
 
-            // Ensure supply comes before provisioning
             if (supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0 &&
                 supplyHeaderIdx > provisioningHeaderIdx)
                 (supplyHeaderIdx, provisioningHeaderIdx) = (provisioningHeaderIdx, supplyHeaderIdx);
 
             return supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0;
         }
+
 
 
         private static List<nint> CollectRowComponentsBetween(AtkUnitBase* unit, int startExclusive, int endExclusive)
