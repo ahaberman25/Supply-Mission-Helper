@@ -10,6 +10,9 @@ jobs:
   build:
     runs-on: windows-latest
     
+    env:
+      DALAMUD_HOME: ${{ github.workspace }}/dalamud
+    
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -19,23 +22,16 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
-      - name: Setup Dalamud
+      - name: Download Dalamud
         shell: pwsh
         run: |
-          # Create directory structure
-          $dalamudPath = "$env:AppData\XIVLauncher\addon\Hooks\dev"
-          New-Item -ItemType Directory -Force -Path $dalamudPath
-          
-          # Download and extract Dalamud
-          Write-Host "Downloading Dalamud..."
+          Write-Host "Downloading Dalamud to $env:DALAMUD_HOME"
+          New-Item -ItemType Directory -Force -Path $env:DALAMUD_HOME
           Invoke-WebRequest -Uri "https://goatcorp.github.io/dalamud-distrib/latest.zip" -OutFile "dalamud.zip"
+          Expand-Archive -Path "dalamud.zip" -DestinationPath $env:DALAMUD_HOME -Force
           
-          Write-Host "Extracting Dalamud..."
-          Expand-Archive -Path "dalamud.zip" -DestinationPath $dalamudPath -Force
-          
-          # List files to verify
           Write-Host "Dalamud files:"
-          Get-ChildItem $dalamudPath
+          Get-ChildItem $env:DALAMUD_HOME | Select-Object Name
 
       - name: Restore dependencies
         run: dotnet restore
@@ -43,39 +39,20 @@ jobs:
       - name: Build
         shell: pwsh
         run: |
-          $dalamudPath = "$env:AppData\XIVLauncher\addon\Hooks\dev"
-          dotnet build --configuration Release --no-restore /p:DalamudLibPath="$dalamudPath\"
+          dotnet build --configuration Release --no-restore /p:DalamudLibPath="${env:DALAMUD_HOME}\"
 
       - name: Create release package
         shell: pwsh
         run: |
-          # Get version from tag
           $version = "${{ github.ref_name }}".TrimStart('v')
-          Write-Host "Creating release for version $version"
-          
-          # Update version in manifest
           $manifest = Get-Content "SupplyMissionHelper.json" -Raw | ConvertFrom-Json
           $manifest.AssemblyVersion = $version
           $manifest | ConvertTo-Json -Depth 10 | Set-Content "SupplyMissionHelper.json"
           
-          # Create release directory
           New-Item -ItemType Directory -Force -Path "release"
-          
-          # Copy plugin files
-          $outputPath = "bin\Release\net8.0-windows"
-          if (Test-Path "$outputPath\SupplyMissionHelper.dll") {
-            Copy-Item "$outputPath\SupplyMissionHelper.dll" -Destination "release\"
-            Copy-Item "SupplyMissionHelper.json" -Destination "release\"
-            
-            # Create zip
-            Compress-Archive -Path "release\*" -DestinationPath "SupplyMissionHelper.zip" -Force
-            
-            Write-Host "Release package created successfully"
-            Get-ChildItem "SupplyMissionHelper.zip"
-          } else {
-            Write-Error "Build output not found at $outputPath"
-            exit 1
-          }
+          Copy-Item "bin\Release\net8.0-windows\SupplyMissionHelper.dll" -Destination "release\"
+          Copy-Item "SupplyMissionHelper.json" -Destination "release\"
+          Compress-Archive -Path "release\*" -DestinationPath "SupplyMissionHelper.zip" -Force
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
