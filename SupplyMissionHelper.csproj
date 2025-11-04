@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
 
+  <!-- Add the Dalamud SDK (pulled from nuget.org) -->
+  <Sdk Name="Dalamud.NET.Sdk" Version="13.1.0" />
+
   <PropertyGroup>
     <Authors>ahaberman25</Authors>
     <Company>ahaberman25</Company>
@@ -10,7 +13,7 @@
   </PropertyGroup>
 
   <PropertyGroup>
-    <!-- Dalamud.Sdk targets .NET 8; keep this on net8.0-windows -->
+    <!-- Dalamud SDK targets .NET 8 -->
     <TargetFramework>net8.0-windows</TargetFramework>
     <Platforms>x64</Platforms>
     <Nullable>enable</Nullable>
@@ -21,9 +24,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Pulls in Dalamud, ImGui.NET, Lumina, etc. for compile-time -->
-    <PackageReference Include="Dalamud.Sdk" Version="11.0.0" />
-    <!-- Keep your packager -->
+    <!-- Keep the packager for Release packing -->
     <PackageReference Include="DalamudPackager" Version="2.1.13" />
   </ItemGroup>
 
