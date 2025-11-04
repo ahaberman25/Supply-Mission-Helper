@@ -1,76 +1,66 @@
+using Dalamud.Game.Command;
 using Dalamud.Interface.Windowing;
 using Dalamud.Plugin;
 using Dalamud.Plugin.Services;
 
-namespace SupplyMissionHelper
+namespace SupplyMissionHelper;
+
+public sealed class Plugin : IDalamudPlugin
 {
-    public sealed class Plugin : IDalamudPlugin
+    private const string CommandName = "/supplymission";
+
+    public Configuration Configuration { get; init; }
+    public readonly WindowSystem WindowSystem = new("SupplyMissionHelper");
+
+    private IDalamudPluginInterface PluginInterface { get; init; }
+    private ICommandManager CommandManager { get; init; }
+    private MainWindow MainWindow { get; init; }
+
+    private readonly IDataManager dataManager;
+    private readonly ITimerManager timerManager;
+    private readonly GcMissionScanner scanner;
+
+    public Plugin(
+        IDalamudPluginInterface pluginInterface,
+        ICommandManager commandManager,
+        IDataManager dataManager,
+        IGameGui gameGui,
+        ITimerManager timerManager // ⬅️ inject Timers service (API 13)
+    )
     {
-        public string Name => "Supply Mission Helper";
+        PluginInterface = pluginInterface;
+        CommandManager = commandManager;
+        this.dataManager = dataManager;
+        this.timerManager = timerManager;
 
-        private readonly IDalamudPluginInterface _pi;
-        private readonly ICommandManager _commands;
-        private readonly IPluginLog _log;
-        private readonly IGameGui _gameGui;
-        private readonly IDataManager _data;
+        Configuration = PluginInterface.GetPluginConfig() as Configuration ?? new Configuration();
+        Configuration.Initialize(PluginInterface);
 
-        private readonly WindowSystem _windows = new("SupplyMissionHelper");
-        private readonly Configuration _config;
-        private readonly MainWindow _mainWindow;
+        scanner = new GcMissionScanner(this.timerManager, this.dataManager);
 
-        public Plugin(
-            IDalamudPluginInterface pluginInterface,
-            ICommandManager commandManager,
-            IPluginLog log,
-            IGameGui gameGui,
-            IDataManager dataManager)
+        MainWindow = new MainWindow(this, scanner);
+        WindowSystem.AddWindow(MainWindow);
+
+        CommandManager.AddHandler(CommandName, new CommandInfo(OnCommand)
         {
-            _pi = pluginInterface;
-            _commands = commandManager;
-            _log = log;
-            _gameGui = gameGui;
-            _data = dataManager;
+            HelpMessage = "Open the Supply Mission Helper window"
+        });
 
-            _config = _pi.GetPluginConfig() as Configuration ?? new Configuration();
-            _config.Initialize(_pi);
-            // ...
-            var scanner = new MissionScanner(_gameGui, _data, _log);
-            var calculator = new RecipeCalculator(_data, _log);
-
-            // ✨ pass _log into MainWindow
-            _mainWindow = new MainWindow(_config, scanner, calculator, _log);
-            _windows.AddWindow(_mainWindow);
-            // ...
-
-            _commands.AddHandler("/supplymission", new Dalamud.Game.Command.CommandInfo(OnCommand)
-            {
-                HelpMessage = "Open the Supply Mission Helper window"
-            });
-
-            _pi.UiBuilder.Draw += DrawUI;
-            _pi.UiBuilder.OpenMainUi += ToggleMainWindow;
-            _pi.UiBuilder.OpenConfigUi += ToggleMainWindow;
-
-            _log.Info("Supply Mission Helper loaded.");
-        }
-
-        private void OnCommand(string cmd, string args) => ToggleMainWindow();
-
-        private void ToggleMainWindow()
-        {
-            _mainWindow.IsOpen = !_mainWindow.IsOpen;
-        }
-
-        private void DrawUI() => _windows.Draw();
-
-        public void Dispose()
-        {
-            _windows.RemoveAllWindows();
-            _commands.RemoveHandler("/supplymission");
-            _pi.UiBuilder.Draw -= DrawUI;
-            _pi.UiBuilder.OpenMainUi -= ToggleMainWindow;
-            _pi.UiBuilder.OpenConfigUi -= ToggleMainWindow;
-            _log.Info("Supply Mission Helper disposed.");
-        }
+        PluginInterface.UiBuilder.Draw += DrawUI;
+        PluginInterface.UiBuilder.OpenConfigUi += ToggleConfigUI;
+        PluginInterface.UiBuilder.OpenMainUi += ToggleConfigUI;
     }
+
+    public void Dispose()
+    {
+        WindowSystem.RemoveAllWindows();
+        MainWindow.Dispose();
+        CommandManager.RemoveHandler(CommandName);
+    }
+
+    private void OnCommand(string command, string args) => ToggleConfigUI();
+
+    private void DrawUI() => WindowSystem.Draw();
+
+    private void ToggleConfigUI() => MainWindow.Toggle();
 }
