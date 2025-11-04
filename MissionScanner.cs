@@ -124,7 +124,7 @@ namespace SupplyMissionHelper
                 if (node == null || node->Type != NodeType.Text) continue;
 
                 // NOTE: field name is NodeId
-                ushort id = node->NodeId;
+                ushort id = (ushort)node->NodeId;
 
                 if (id == SUPPLY_HEADER_NODEID)
                     supplyHeaderIdx = i;
