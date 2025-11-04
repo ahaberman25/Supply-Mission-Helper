@@ -8,25 +8,25 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 namespace SupplyMissionHelper
 {
     /// <summary>
-    /// Robust scanner for GC "Supply & Provisioning Missions" (ContentsInfoDetail).
-    /// 1) Detects headers by stable NodeId (Supply=3, Provisioning=16).
-    /// 2) Recursively searches all component nodes for "row-like" components:
-    ///      - child #4: text (name)
-    ///      - child #7: int  (requested)
-    ///      - child #8: int  (on-hand, optional)
-    /// 3) Logs discoveries so we can later hardcode fast NodeId paths.
+    /// Scanner that reads GC "Supply & Provisioning Missions" from ContentsInfoDetail.
+    /// Uses top-level NodeList *indices* (not NodeIds) to split sections, based on
+    /// observed layout:
+    ///   - One header (e.g., Provisioning) near the top (higher index)
+    ///   - Then Supply rows (indices strictly between the two headers, descending)
+    ///   - Then Supply header (lower index)
+    ///   - Then Provisioning rows (below the Supply header, further descending)
+    /// Child mapping inside each row component:
+    ///   - #4  = item name (text)
+    ///   - #7  = requested (int)
+    ///   - #8  = on-hand  (int, optional)
     /// </summary>
     public sealed unsafe class MissionScanner
     {
         private readonly IGameGui _gameGui;
-        private readonly IDataManager _data;   // reserved for future Lumina lookups
+        private readonly IDataManager _data;   // reserved for Lumina lookups later
         private readonly IPluginLog _log;
 
         private static readonly string[] TargetAddons = { "ContentsInfoDetail" };
-
-        // Header TextNode NodeIds (stable per your inspection)
-        private const uint SUPPLY_HEADER_NODEID       = 3u;   // "Supply Missions"
-        private const uint PROVISIONING_HEADER_NODEID = 16u;  // "Provisioning Missions"
 
         // Child text indices inside a row component
         private const int CHILD_INDEX_NAME      = 4;
@@ -80,58 +80,81 @@ namespace SupplyMissionHelper
                 return results;
             }
 
-            // Locate headers (useful for bounds/status; not strictly required to parse rows)
-            var haveHeaders = TryFindHeaderIndices(unit, out var supplyHeaderIdx, out var provisioningHeaderIdx);
-            _log.Info($"[SMH] NodeListCount={unit->UldManager.NodeListCount}, HeadersFound={haveHeaders} (SupplyIdx={supplyHeaderIdx}, ProvIdx={provisioningHeaderIdx})");
+            var nodeCount = unit->UldManager.NodeListCount;
+            _log.Info($"[SMH] Top NodeListCount={nodeCount}");
 
-            // Recursively discover row-like components anywhere under the addon
-            var allRowCandidates = FindRowLikeComponentsRecursive(unit);
-            _log.Info($"[SMH] Discovered {allRowCandidates.Count} row-like component(s).");
-
-            // If we have headers, try to split rows into sections by comparing index proximity:
-            var rowsSupply       = new List<RowCandidate>();
-            var rowsProvisioning = new List<RowCandidate>();
-
-            if (haveHeaders && allRowCandidates.Count > 0)
+            // Find headers by TEXT (index-based splitting is all we need)
+            if (!TryFindHeaderIndicesByText(unit, out var supplyHeaderIdx, out var provisioningHeaderIdx))
             {
-                foreach (var rc in allRowCandidates)
+                status = "Headers not found (localization/variant).";
+                return results;
+            }
+
+            // Ensure header ordering (we expect provisioning header above supply header by index)
+            var hiIdx = Math.Max(supplyHeaderIdx, provisioningHeaderIdx);
+            var loIdx = Math.Min(supplyHeaderIdx, provisioningHeaderIdx);
+            var hiHeaderName = hiIdx == provisioningHeaderIdx ? "ProvisioningHeader" : "SupplyHeader";
+            var loHeaderName = loIdx == supplyHeaderIdx ? "SupplyHeader" : "ProvisioningHeader";
+            _log.Info($"[SMH] Headers: {hiHeaderName}={hiIdx}, {loHeaderName}={loIdx}");
+
+            // Based on your observation:
+            // - Supply rows are strictly between hiIdx and loIdx (descending)
+            // - Provisioning rows are below the supply header (i < loIdx), descending
+            var supplyRows       = new List<MissionItem>();
+            var provisioningRows = new List<MissionItem>();
+
+            // 1) Supply band: (hiIdx - 1) down to (loIdx + 1)
+            for (int i = hiIdx - 1; i > loIdx; i--)
+            {
+                var node = unit->UldManager.NodeList[i];
+                if (node == null || node->Type != NodeType.Component) continue;
+
+                if (TryParseRowFromComponent((AtkComponentNode*)node, out var item))
                 {
-                    var distToSupply = Math.Abs(rc.TopIndex - supplyHeaderIdx);
-                    var distToProv   = Math.Abs(rc.TopIndex - provisioningHeaderIdx);
-                    if (distToSupply <= distToProv) rowsSupply.Add(rc); else rowsProvisioning.Add(rc);
+                    item.Section = "Supply";
+                    supplyRows.Add(item);
+                    _log.Info($"[SMH] SUPPLY row at idx={i}: '{item.Name}' req={item.Quantity} have={item.OnHand}");
                 }
             }
-            else
+
+            // 2) Provisioning band: walk below the lower header (loIdx - 1 .. 0) until rows stop parsing
+            //    (we don't know exact count, so just try all; non-rows will be skipped)
+            for (int i = loIdx - 1; i >= 0; i--)
             {
-                // If no headers, just dump everything into "Supply" so we at least show something
-                rowsSupply.AddRange(allRowCandidates);
+                var node = unit->UldManager.NodeList[i];
+                if (node == null || node->Type != NodeType.Component) continue;
+
+                if (TryParseRowFromComponent((AtkComponentNode*)node, out var item))
+                {
+                    item.Section = "Provisioning";
+                    provisioningRows.Add(item);
+                    _log.Info($"[SMH] PROVISIONING row at idx={i}: '{item.Name}' req={item.Quantity} have={item.OnHand}");
+                }
             }
 
-            // Parse each candidate component into Name / Requested / OnHand
-            ParseRowCandidates(rowsSupply, "Supply", results);
-            ParseRowCandidates(rowsProvisioning, "Provisioning", results);
+            // Collate
+            results.AddRange(supplyRows);
+            results.AddRange(provisioningRows);
 
             if (results.Count == 0)
             {
                 if (WindowContains(unit, "No more deliveries are being accepted today"))
                     status = "No missions available today.";
-                else if (!haveHeaders)
-                    status = "GC view detected, but section headers not found (UI variant?).";
                 else
-                    status = "No active mission rows detected (UI layout variant or daily cap).";
+                    status = "No mission rows parsed in the expected index bands.";
                 return results;
             }
 
             // Merge duplicates defensively
             results = results
-                .GroupBy(r => r.Name ?? string.Empty)
+                .GroupBy(r => (r.Section ?? "") + "||" + (r.Name ?? ""))
                 .Select(g => new MissionItem
                 {
-                    Name     = g.Key,
+                    Section  = g.First().Section,
+                    Name     = g.First().Name,
                     Quantity = g.Sum(x => x.Quantity),
                     OnHand   = g.Sum(x => x.OnHand),
-                    ItemId   = 0,
-                    Section  = g.First().Section
+                    ItemId   = 0
                 })
                 .ToList();
 
@@ -139,245 +162,138 @@ namespace SupplyMissionHelper
             return results;
         }
 
-        // ----------------- internals -----------------
+        // -------- internals --------
 
-        private static bool TryFindHeaderIndices(AtkUnitBase* unit, out int supplyHeaderIdx, out int provisioningHeaderIdx)
+        private static bool TryFindHeaderIndicesByText(AtkUnitBase* unit, out int supplyHeaderIdx, out int provisioningHeaderIdx)
         {
             supplyHeaderIdx = -1;
             provisioningHeaderIdx = -1;
 
-            // Prefer NodeId (stable)
+            // Pass 1: exact English labels (adjust here if you run non-English client)
             for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
                 var node = unit->UldManager.NodeList[i];
                 if (node == null || node->Type != NodeType.Text) continue;
 
-                uint id = node->NodeId;
-                if (id == SUPPLY_HEADER_NODEID)
+                var t = (AtkTextNode*)node;
+                if (t->NodeText.StringPtr == null) continue;
+                var s = t->NodeText.ToString().Trim();
+
+                if (supplyHeaderIdx < 0 &&
+                    s.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase))
                     supplyHeaderIdx = i;
-                else if (id == PROVISIONING_HEADER_NODEID)
+
+                if (provisioningHeaderIdx < 0 &&
+                    s.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase))
                     provisioningHeaderIdx = i;
             }
 
-            // Fallback: text matching (localization may differ)
-            if (supplyHeaderIdx < 0 || provisioningHeaderIdx < 0)
+            if (supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0)
+                return true;
+
+            // Pass 2: looser contains() fallback
+            for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
-                for (var i = 0; i < unit->UldManager.NodeListCount; i++)
-                {
-                    var node = unit->UldManager.NodeList[i];
-                    if (node == null || node->Type != NodeType.Text) continue;
+                var node = unit->UldManager.NodeList[i];
+                if (node == null || node->Type != NodeType.Text) continue;
 
-                    var t = (AtkTextNode*)node;
-                    if (t->NodeText.StringPtr == null) continue;
+                var t = (AtkTextNode*)node;
+                if (t->NodeText.StringPtr == null) continue;
+                var s = t->NodeText.ToString().Trim();
 
-                    var s = t->NodeText.ToString().Trim();
-                    if (supplyHeaderIdx < 0 &&
-                        s.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase))
-                        supplyHeaderIdx = i;
+                if (supplyHeaderIdx < 0 &&
+                    s.Contains("Supply", StringComparison.OrdinalIgnoreCase) &&
+                    s.Contains("Mission", StringComparison.OrdinalIgnoreCase))
+                    supplyHeaderIdx = i;
 
-                    if (provisioningHeaderIdx < 0 &&
-                        s.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase))
-                        provisioningHeaderIdx = i;
-                }
-            }
-
-            // Ensure order supply < provisioning
-            if (supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0 &&
-                supplyHeaderIdx > provisioningHeaderIdx)
-            {
-                (supplyHeaderIdx, provisioningHeaderIdx) = (provisioningHeaderIdx, supplyHeaderIdx);
+                if (provisioningHeaderIdx < 0 &&
+                    s.Contains("Provision", StringComparison.OrdinalIgnoreCase) &&
+                    s.Contains("Mission", StringComparison.OrdinalIgnoreCase))
+                    provisioningHeaderIdx = i;
             }
 
             return supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0;
         }
 
-        // A compact struct to hold a candidate row component and a bit of context
-        private readonly struct RowCandidate
+        private bool TryParseRowFromComponent(AtkComponentNode* compNode, out MissionItem item)
         {
-            public readonly nint CompPtr;     // AtkComponentNode* (stored as nint)
-            public readonly int  TopIndex;    // index of this component in the top-level NodeList (closest ancestor we iterated)
-            public readonly uint NodeId;      // the component's NodeId
+            item = new MissionItem();
+            if (compNode == null || compNode->Component == null) return false;
 
-            public RowCandidate(nint compPtr, int topIndex, uint nodeId)
+            // Try this component's own children
+            if (TryParseRowFromUld(compNode->Component->UldManager, out item))
+                return true;
+
+            // Otherwise: one nested level (some skins wrap a component inside another)
+            var uld = compNode->Component->UldManager;
+            if (uld.NodeList != null && uld.NodeListCount > 0)
             {
-                CompPtr = compPtr;
-                TopIndex = topIndex;
-                NodeId = nodeId;
-            }
-        }
-
-        /// <summary>
-        /// Recursively search for components that look like mission rows anywhere under the addon.
-        /// </summary>
-        private List<RowCandidate> FindRowLikeComponentsRecursive(AtkUnitBase* unit)
-        {
-            var found = new List<RowCandidate>();
-            var list = unit->UldManager.NodeList;
-            var count = unit->UldManager.NodeListCount;
-            if (list == null || count == 0) return found;
-
-            for (int i = 0; i < count; i++)
-            {
-                var node = list[i];
-                if (node == null) continue;
-
-                if (node->Type == NodeType.Component)
+                for (int j = 0; j < uld.NodeListCount; j++)
                 {
-                    var compNode = (AtkComponentNode*)node;
-                    if (compNode->Component != null)
-                    {
-                        // 1) Check this component itself
-                        if (LooksLikeRow(&(compNode->Component->UldManager)))
-                        {
-                            found.Add(new RowCandidate((nint)compNode, i, node->NodeId));
-                            _log.Info($"[SMH] Row-like component at topIndex={i}, NodeId={node->NodeId}");
-                            continue;
-                        }
+                    var n = uld.NodeList[j];
+                    if (n == null || n->Type != NodeType.Component) continue;
+                    var nested = (AtkComponentNode*)n;
+                    if (nested->Component == null) continue;
 
-                        // 2) Recurse into its children (nested components)
-                        var uld = compNode->Component->UldManager;
-                        if (uld.NodeList != null && uld.NodeListCount > 0)
-                        {
-                            FindRowLikeComponentsRecursiveInto(uld, i, found);
-                        }
-                    }
+                    if (TryParseRowFromUld(nested->Component->UldManager, out item))
+                        return true;
                 }
             }
 
-            return found;
+            return false;
         }
 
-        /// <summary>
-        /// Recursively descend into a component's children, looking for row-like components.
-        /// </summary>
-        private void FindRowLikeComponentsRecursiveInto(AtkUldManager parentUld, int topIndexContext, List<RowCandidate> sink)
+        private bool TryParseRowFromUld(AtkUldManager uld, out MissionItem item)
         {
-            for (int j = 0; j < parentUld.NodeListCount; j++)
+            item = new MissionItem();
+            if (uld.NodeList == null || uld.NodeListCount < 5) return false;
+
+            // Fast path: fixed child indices
+            if (TryReadTextAt(uld, CHILD_INDEX_NAME, out var name) && !string.IsNullOrWhiteSpace(name) &&
+                TryReadIntAt(uld, CHILD_INDEX_REQUESTED, out var requested))
             {
-                var n = parentUld.NodeList[j];
-                if (n == null) continue;
-                if (n->Type != NodeType.Component) continue;
+                TryReadIntAt(uld, CHILD_INDEX_ONHAND, out var onHand);
+                item.Name     = name.Trim();
+                item.Quantity = requested;
+                item.OnHand   = onHand;
+                return true;
+            }
 
-                var cnode = (AtkComponentNode*)n;
-                if (cnode->Component == null) continue;
+            // Fallback: scan child texts to recover weird layouts
+            string? bestName = null;
+            int req = 0, have = 0;
 
-                var uld = cnode->Component->UldManager;
+            for (int i = 0; i < uld.NodeListCount; i++)
+            {
+                var n = uld.NodeList[i];
+                if (n == null || n->Type != NodeType.Text) continue;
+                var t = (AtkTextNode*)n;
+                if (t->NodeText.StringPtr == null) continue;
+                var s = t->NodeText.ToString().Trim();
+                if (string.IsNullOrEmpty(s)) continue;
+                if (LooksLikeFraction(s)) continue; // skip "0/20" style texts
 
-                if (LooksLikeRow(&uld))
+                if (IsNumeric(s) && int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
                 {
-                    sink.Add(new RowCandidate((nint)cnode, topIndexContext, n->NodeId));
-                    _log.Info($"[SMH] Row-like nested component under topIndex={topIndexContext}, NodeId={n->NodeId}");
+                    if (req == 0) req = iv;         // first number we see = requested
+                    else have = iv;                 // second number (if any) = on-hand
                 }
-                else if (uld.NodeList != null && uld.NodeListCount > 0)
+                else
                 {
-                    // Keep going down
-                    FindRowLikeComponentsRecursiveInto(uld, topIndexContext, sink);
+                    if (bestName is null || s.Length > bestName.Length)
+                        bestName = s;
                 }
             }
-        }
 
-        /// <summary>
-        /// Determines if a component's own UldManager fits the expected row shape.
-        /// </summary>
-        private bool LooksLikeRow(AtkUldManager* uld)
-        {
-            if (uld == null || uld->NodeList == null) return false;
-            // Need indices up to 8 at least (0..8) to read name/#7/#8 reliably
-            if (uld->NodeListCount < 9) return false;
-
-            // child #4 must be non-empty text
-            if (!TryReadTextAt(*uld, CHILD_INDEX_NAME, out var name) || string.IsNullOrWhiteSpace(name))
-                return false;
-
-            // child #7 must parse to int
-            if (!TryReadIntAt(*uld, CHILD_INDEX_REQUESTED, out var req))
-                return false;
-
-            // #8 is optional
-            return true;
-        }
-
-        private void ParseRowCandidates(IEnumerable<RowCandidate> rows, string section, List<MissionItem> sink)
-
-        {
-            foreach (var rc in rows)
+            if (!string.IsNullOrWhiteSpace(bestName) && req > 0)
             {
-                var compNode = (AtkComponentNode*)rc.CompPtr;
-                if (compNode == null || compNode->Component == null) continue;
-
-                var uld = compNode->Component->UldManager;
-                if (uld.NodeList == null || uld.NodeListCount == 0) continue;
-
-                string? name = null;
-                int requested = 0;
-                int onHand = 0;
-
-                // Fast path: fixed indices
-                if (TryReadTextAt(uld, CHILD_INDEX_NAME, out var nameCandidate) && !string.IsNullOrWhiteSpace(nameCandidate))
-                    name = nameCandidate.Trim();
-
-                TryReadIntAt(uld, CHILD_INDEX_REQUESTED, out requested);
-                TryReadIntAt(uld, CHILD_INDEX_ONHAND, out onHand);
-
-                // Fallback: scan texts to recover (layout drift)
-                if (name is null || requested == 0)
-                {
-                    for (var j = 0; j < uld.NodeListCount; j++)
-                    {
-                        var n = uld.NodeList[j];
-                        if (n == null || n->Type != NodeType.Text) continue;
-
-                        var t = (AtkTextNode*)n;
-                        if (t->NodeText.StringPtr == null) continue;
-
-                        var s = t->NodeText.ToString().Trim();
-                        if (string.IsNullOrWhiteSpace(s)) continue;
-                        if (LooksLikeFraction(s)) continue; // skip "0/20"
-
-                        if (requested == 0 && IsNumeric(s) &&
-                            int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
-                        {
-                            requested = iv; continue;
-                        }
-
-                        if (name is null || s.Length > name.Length) name = s;
-                    }
-                }
-
-                if (!string.IsNullOrEmpty(name) && requested > 0)
-                {
-                    sink.Add(new MissionItem
-                    {
-                        Name     = name,
-                        Quantity = requested,
-                        OnHand   = onHand,
-                        ItemId   = 0,
-                        Section  = section
-                    });
-
-                    // swapped to injected logger (v13)
-                    // shows TopIdx + NodeId so you can hardcode fast paths later
-                    // Example: [SMH] Captured Supply row (TopIdx=42, NodeId=456): 'Mythril Ingot' req=3 have=0
-                    // (Info so it appears in default logs)
-                    // NOTE: no Dalamud.Logging.PluginLog in v13
-                    var preview = name.Length > 40 ? name[..40] + "…" : name;
-                    // ReSharper disable once TemplateIsNotCompileTimeConstantProblem
-                    // (Dalamud logger handles composite format at runtime)
-                    compNode->NodeId.ToString(); // touch to avoid warnings in some analyzers
-                    // Log:
-                    // Using _log.Info, not PluginLog
-                    // ReSharper disable once StringLiteralTypo
-                    // (we keep the tag consistent)
-                    // top index is rc.TopIndex (position near header at top-level)
-                    // node id is rc.NodeId (stable on client; great for hardcoding)
-                    // yes, we intentionally keep this as a single line:
-                    // [SMH] Captured {section} row (TopIdx={rc.TopIndex}, NodeId={rc.NodeId}): '{preview}' req={requested} have={onHand}
-                    // so it’s easy to grep.
-                    // 
-                    // Final log:
-                    _log.Info($"[SMH] Captured {section} row (TopIdx={rc.TopIndex}, NodeId={rc.NodeId}): '{preview}' req={requested} have={onHand}");
-                }
+                item.Name     = bestName;
+                item.Quantity = req;
+                item.OnHand   = have;
+                return true;
             }
+
+            return false;
         }
 
         private static bool TryReadTextAt(AtkUldManager uld, int index, out string? text)
