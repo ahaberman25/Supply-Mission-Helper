@@ -131,25 +131,41 @@ namespace SupplyMissionHelper
         // Recursively searches every child component for a row
         private void RecurseNode(AtkResNode* node, List<MissionItem> sink, string section)
         {
-            if (node == null) return;
+            if (node == null)
+                return;
 
+            // Look for any Component node — we only care about AtkComponentNode
             if (node->Type == NodeType.Component)
             {
                 var comp = (AtkComponentNode*)node;
                 if (comp->Component != null)
                 {
-                    if (TryParseRowFromUld(comp->Component->UldManager, out var item))
+                    var uld = comp->Component->UldManager;
+
+                    // Try to parse as a mission row
+                    if (TryParseRowFromUld(uld, out var item))
                     {
                         item.Section = section;
                         sink.Add(item);
-                        _log.Info($"[SMH] {section.ToUpper()} row: '{item.Name}' req={item.Quantity} have={item.OnHand}");
+                        _log.Info($"[SMH] ✅ {section.ToUpper()} row: '{item.Name}' req={item.Quantity} have={item.OnHand}");
+                    }
+                    else
+                    {
+                        // Debug visibility — see if we’re hitting anything at all
+                        var textCount = CountTextNodes(uld);
+                        if (textCount > 3)
+                            _log.Info($"[SMH] ├─ {section}: component node @0x{(nint)comp:X} textCount={textCount}");
                     }
 
-                    var uld = comp->Component->UldManager;
+                    // Recurse into every child node within this ULD
                     if (uld.NodeList != null)
                     {
                         for (int i = 0; i < uld.NodeListCount; i++)
-                            RecurseNode(uld.NodeList[i], sink, section);
+                        {
+                            var child = uld.NodeList[i];
+                            if (child != null)
+                                RecurseNode(child, sink, section);
+                        }
                     }
                 }
             }
@@ -159,25 +175,33 @@ namespace SupplyMissionHelper
                 if (res->ChildNode != null)
                     RecurseNode(res->ChildNode, sink, section);
             }
+
+            // Continue sibling traversal
+            if (node->PrevSiblingNode != null)
+                RecurseNode(node->PrevSiblingNode, sink, section);
         }
+
+
+
 
         private bool TryParseRowFromUld(AtkUldManager uld, out MissionItem item)
         {
             item = new MissionItem();
-            if (uld.NodeList == null || uld.NodeListCount < 5) return false;
+            if (uld.NodeList == null || uld.NodeListCount < 4) return false;
 
-            if (TryReadTextAt(uld, CHILD_INDEX_NAME, out var name) && !string.IsNullOrWhiteSpace(name) &&
+            // Attempt fixed child indices
+            if (TryReadTextAt(uld, CHILD_INDEX_NAME, out var name) &&
                 TryReadIntAt(uld, CHILD_INDEX_REQUESTED, out var requested))
             {
                 TryReadIntAt(uld, CHILD_INDEX_ONHAND, out var onHand);
-                item.Name     = name.Trim();
+                item.Name = name.Trim();
                 item.Quantity = requested;
-                item.OnHand   = onHand;
-                item.ItemId   = 0; // TODO: Lumina lookup mapping from name -> ItemId
+                item.OnHand = onHand;
+                item.ItemId = 0;
                 return true;
             }
 
-            // Fallback: heuristic
+            // Fallback heuristic: look for text + numeric mix
             string? bestName = null;
             int req = 0, have = 0;
 
@@ -190,12 +214,18 @@ namespace SupplyMissionHelper
                 var s = t->NodeText.ToString().Trim();
                 if (string.IsNullOrEmpty(s)) continue;
 
-                if (IsNumeric(s))
+                if (s.Contains('/') && s.Length <= 5) // "0/6" style
+                {
+                    var parts = s.Split('/');
+                    if (parts.Length == 2 && int.TryParse(parts[1], out req))
+                        have = int.TryParse(parts[0], out var tmp) ? tmp : 0;
+                }
+                else if (IsNumeric(s))
                 {
                     if (req == 0) req = int.Parse(s, CultureInfo.InvariantCulture);
                     else have = int.Parse(s, CultureInfo.InvariantCulture);
                 }
-                else if (!s.Contains("Mission", StringComparison.OrdinalIgnoreCase))
+                else if (s.Length > 2 && !s.Contains("Mission", StringComparison.OrdinalIgnoreCase))
                 {
                     bestName = s;
                 }
@@ -203,15 +233,29 @@ namespace SupplyMissionHelper
 
             if (!string.IsNullOrEmpty(bestName) && req > 0)
             {
-                item.Name     = bestName;
+                item.Name = bestName;
                 item.Quantity = req;
-                item.OnHand   = have;
-                item.ItemId   = 0;
+                item.OnHand = have;
+                item.ItemId = 0;
                 return true;
             }
 
             return false;
         }
+
+        private static int CountTextNodes(AtkUldManager uld)
+{
+            if (uld.NodeList == null) return 0;
+            var count = 0;
+            for (int i = 0; i < uld.NodeListCount; i++)
+            {
+                var n = uld.NodeList[i];
+                if (n != null && n->Type == NodeType.Text)
+                    count++;
+            }
+            return count;
+        }
+
 
         private static bool TryReadTextAt(AtkUldManager uld, int index, out string? text)
         {
