@@ -100,13 +100,15 @@ namespace SupplyMissionHelper
         {
             var comp = (AtkComponentNode*)node;
             var uld = comp->Component != null ? &comp->Component->UldManager : null;
-            var childCount = uld != null ? uld->NodeListCount : 0;
+            var childCount = uld != null ? (int)uld->NodeListCount : 0;
+
 
             // Try to grab text from a few child nodes (to identify rows)
             List<string> childTexts = new();
             if (uld != null && uld->NodeList != null)
             {
-                for (int j = 0; j < Math.Min(10, uld->NodeListCount); j++)
+                for (int j = 0; j < Math.Min(10, (int)uld->NodeListCount); j++)
+
                 {
                     var c = uld->NodeList[j];
                     if (c != null && c->Type == NodeType.Text)
