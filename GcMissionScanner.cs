@@ -4,35 +4,20 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using Dalamud.Plugin.Services;
-using Lumina.Excel.GeneratedSheets;
+using SupplyMissionHelper.Models;
 
 namespace SupplyMissionHelper;
-
-public enum MissionType
-{
-    Supply,        // DoH
-    Provisioning   // DoL
-}
-
-public record GcMissionEntry(
-    uint ItemId,
-    string ItemName,
-    uint Quantity,
-    uint JobId,
-    bool IsHq,
-    MissionType Type
-);
 
 public sealed class GcMissionScanner
 {
     private readonly ITimerManager timerManager;
     private readonly IDataManager dataManager;
 
-    // Known property name variants we might encounter on the Timer entry objects
-    private static readonly string[] ItemIdNames   = { "ItemId", "ItemID", "Item", "ItemRowId" };
-    private static readonly string[] QtyNames      = { "Quantity", "Count", "Amount" };
-    private static readonly string[] JobIdNames    = { "JobId", "ClassJobId", "ClassId" };
-    private static readonly string[] HqNames       = { "IsHQ", "IsHighQuality", "HQ" };
+    // Likely property names returned by the timer entries (be lenient)
+    private static readonly string[] ItemIdNames = { "ItemId", "ItemID", "Item", "ItemRowId" };
+    private static readonly string[] QtyNames    = { "Quantity", "Count", "Amount" };
+    private static readonly string[] JobIdNames  = { "JobId", "ClassJobId", "ClassId" };
+    private static readonly string[] HqNames     = { "IsHQ", "IsHighQuality", "HQ" };
 
     public GcMissionScanner(ITimerManager timerManager, IDataManager dataManager)
     {
@@ -40,61 +25,89 @@ public sealed class GcMissionScanner
         this.dataManager = dataManager;
     }
 
-    public IReadOnlyList<GcMissionEntry> GetTodayMissions()
+    public IReadOnlyList<MissionItem> GetTodayMissions()
     {
-        // Try to access ITimerManager.GrandCompanySupplyMissions (API 13)
-        var missionsObj = timerManager
-            .GetType()
-            .GetProperty("GrandCompanySupplyMissions", BindingFlags.Public | BindingFlags.Instance)
-            ?.GetValue(timerManager);
+        var missionsProp = timerManager.GetType()
+            .GetProperty("GrandCompanySupplyMissions", BindingFlags.Public | BindingFlags.Instance);
+        var missionsObj = missionsProp?.GetValue(timerManager);
 
         if (missionsObj is not IEnumerable enumerable)
-            return Array.Empty<GcMissionEntry>();
+            return Array.Empty<MissionItem>();
 
-        var entries = new List<GcMissionEntry>();
-        var itemSheet = dataManager.GetExcelSheet<Item>();
+        var results = new List<MissionItem>();
 
         foreach (var mission in enumerable)
         {
-            // Reflect properties
-            uint itemId   = ReadUInt(mission, ItemIdNames);
-            uint qty      = ReadUInt(mission, QtyNames, defaultValue: 1);
-            uint jobId    = ReadUInt(mission, JobIdNames);
-            bool isHq     = ReadBool(mission, HqNames);
+            uint itemId = ReadUInt(mission, ItemIdNames);
+            uint qty    = ReadUInt(mission, QtyNames, 1);
+            uint jobId  = ReadUInt(mission, JobIdNames);
+            bool isHq   = ReadBool(mission, HqNames);
 
-            // Look up item name
-            var itemRow = itemSheet?.GetRow(itemId);
-            var itemName = itemRow?.Name?.ToString() ?? $"Item #{itemId}";
-
-            // Classify Supply (DoH) vs Provisioning (DoL)
+            string itemName = ResolveItemName(itemId) ?? $"Item #{itemId}";
             var type = IsCraftingJob(jobId) ? MissionType.Supply : MissionType.Provisioning;
 
-            entries.Add(new GcMissionEntry(itemId, itemName, qty, jobId, isHq, type));
+            results.Add(new MissionItem
+            {
+                ItemId   = itemId,
+                ItemName = itemName,
+                Quantity = qty,
+                JobId    = jobId,
+                IsHq     = isHq,
+                Type     = type
+            });
         }
 
-        // Stable ordering: Supply first (crafting jobs ASC), then Provisioning (gathering jobs ASC)
-        return entries
-            .OrderBy(e => e.Type == MissionType.Provisioning) // Supply before Provisioning
-            .ThenBy(e => e.JobId)
-            .ThenBy(e => e.ItemName, StringComparer.OrdinalIgnoreCase)
+        return results
+            .OrderBy(r => r.Type == MissionType.Provisioning) // Supply first
+            .ThenBy(r => r.JobId)
+            .ThenBy(r => r.ItemName, StringComparer.OrdinalIgnoreCase)
             .ToList();
+    }
+
+    private string? ResolveItemName(uint itemId)
+    {
+        // Try to use generated sheet type via reflection only if it exists in runtime
+        var itemType = Type.GetType("Lumina.Excel.GeneratedSheets.Item, Lumina.Excel.GeneratedSheets");
+        if (itemType == null)
+            return null;
+
+        // IDataManager.GetExcelSheet<T>()
+        var getSheetGeneric = typeof(IDataManager).GetMethods()
+            .FirstOrDefault(m => m.Name == "GetExcelSheet" && m.IsGenericMethod && m.GetParameters().Length == 0);
+        if (getSheetGeneric == null)
+            return null;
+
+        var getRow = itemType.Assembly
+            .GetType("Lumina.Excel.ExcelSheet`1")?
+            .MakeGenericType(itemType)
+            .GetMethod("GetRow", new[] { typeof(uint) });
+
+        if (getRow == null)
+            return null;
+
+        var sheet = getSheetGeneric.MakeGenericMethod(itemType).Invoke(dataManager, null);
+        if (sheet == null)
+            return null;
+
+        var row = getRow.Invoke(sheet, new object[] { itemId });
+        if (row == null)
+            return null;
+
+        // Item.Name is usually SeString; ToString() yields the text
+        var nameProp = row.GetType().GetProperty("Name", BindingFlags.Public | BindingFlags.Instance);
+        var nameVal = nameProp?.GetValue(row);
+        return nameVal?.ToString();
     }
 
     private static uint ReadUInt(object obj, string[] names, uint defaultValue = 0)
     {
         foreach (var n in names)
         {
-            var prop = obj.GetType().GetProperty(n, BindingFlags.Public | BindingFlags.Instance);
-            if (prop == null) continue;
-
-            var val = prop.GetValue(obj);
-            if (val == null) continue;
-
-            try
-            {
-                return Convert.ToUInt32(val);
-            }
-            catch { /* ignore */ }
+            var p = obj.GetType().GetProperty(n, BindingFlags.Public | BindingFlags.Instance);
+            if (p == null) continue;
+            var v = p.GetValue(obj);
+            if (v == null) continue;
+            try { return Convert.ToUInt32(v); } catch { }
         }
         return defaultValue;
     }
@@ -103,25 +116,15 @@ public sealed class GcMissionScanner
     {
         foreach (var n in names)
         {
-            var prop = obj.GetType().GetProperty(n, BindingFlags.Public | BindingFlags.Instance);
-            if (prop == null) continue;
-
-            var val = prop.GetValue(obj);
-            if (val == null) continue;
-
-            try
-            {
-                return Convert.ToBoolean(val);
-            }
-            catch { /* ignore */ }
+            var p = obj.GetType().GetProperty(n, BindingFlags.Public | BindingFlags.Instance);
+            if (p == null) continue;
+            var v = p.GetValue(obj);
+            if (v == null) continue;
+            try { return Convert.ToBoolean(v); } catch { }
         }
         return defaultValue;
     }
 
-    // DoH (8–15) / DoL (16–18) — consistent with FFXIV ClassJob rows
-    private static bool IsCraftingJob(uint jobId)
-        => jobId is >= 8 and <= 15;
-
-    private static bool IsGatheringJob(uint jobId)
-        => jobId is >= 16 and <= 18;
+    private static bool IsCraftingJob(uint jobId) => jobId is >= 8 and <= 15;   // DoH
+    // private static bool IsGatheringJob(uint jobId) => jobId is >= 16 and <= 18; // DoL
 }

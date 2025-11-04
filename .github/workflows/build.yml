@@ -10,8 +10,10 @@ jobs:
   build:
     runs-on: windows-latest
     env:
-      DALAMUD_HOME: ${{ github.workspace }}/dalamud
-    
+      DALAMUD_HOME: ${{ github.workspace }}\dalamud
+      PROJECT_DIR: Supply-Mission-Helper       # <-- adjust if your csproj is not in this folder
+      PROJECT_FILE: SupplyMissionHelper.csproj
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -19,68 +21,67 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '9.0.x'
+          dotnet-version: '8.0.x'              # <-- match your csproj TFM (change if needed)
 
-      - name: Download Dalamud
+      - name: Download Dalamud distributable
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path $env:DALAMUD_HOME
-          Invoke-WebRequest -Uri "https://goatcorp.github.io/dalamud-distrib/latest.zip" -OutFile "dalamud.zip"
-          Expand-Archive -Path "dalamud.zip" -DestinationPath $env:DALAMUD_HOME -Force
-
-      - name: Restore
-        run: dotnet restore
+          $ErrorActionPreference = 'Stop'
+          $dl = "https://goatcorp.github.io/dalamud-distrib/latest.zip"
+          Invoke-WebRequest -Uri $dl -OutFile latest.zip
+          New-Item -ItemType Directory -Force -Path "$env:DALAMUD_HOME" | Out-Null
+          Expand-Archive -Path latest.zip -DestinationPath "$env:DALAMUD_HOME" -Force
+          Write-Host "Expanded Dalamud to: $env:DALAMUD_HOME"
+          Write-Host "Tree:"
+          Get-ChildItem "$env:DALAMUD_HOME" -Recurse | Select-Object FullName
 
       - name: Build
         shell: pwsh
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          Write-Host "=== Starting Build ==="
-          Write-Host "DalamudLibPath: ${env:DALAMUD_HOME}"
-          
-          dotnet build --configuration Release --no-restore /p:DalamudLibPath="${env:DALAMUD_HOME}\" -v:detailed
-          
-          $exitCode = $LASTEXITCODE
-          Write-Host "Build exit code: $exitCode"
-          
-          if ($exitCode -ne 0) {
-            Write-Error "Build failed with exit code $exitCode"
-            exit $exitCode
-          }
-          
-          Write-Host "=== Build completed successfully ==="
+          $ErrorActionPreference = 'Stop'
+          $DalamudLibPath = (Join-Path "$env:DALAMUD_HOME" "bin\")  # must end with slash
+          Write-Host "DalamudLibPath=$DalamudLibPath"
+          dotnet build ".\$env:PROJECT_FILE" -c Release /p:DalamudLibPath="$DalamudLibPath"
 
       - name: Verify Build Output
         shell: pwsh
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          $dllPath = "bin/Release/SupplyMissionHelper.dll"
-          if (-not (Test-Path $dllPath)) {
-            Write-Error "Build output not found at $dllPath"
+          $ErrorActionPreference = 'Stop'
+          # Find the produced DLL under bin/Release/**/SupplyMissionHelper.dll
+          $dll = Get-ChildItem -Path "bin\Release" -Recurse -Filter "SupplyMissionHelper.dll" | Select-Object -First 1
+          if (-not $dll) {
             Write-Host "Contents of bin/Release:"
-            Get-ChildItem "bin/Release" -Recurse | Select-Object FullName
-            exit 1
+            Get-ChildItem "bin\Release" -Recurse | Select-Object FullName
+            throw "Build output not found."
           }
-          Write-Host "✓ Build output found: $dllPath"
+          Write-Host "✓ Build output found at $($dll.FullName)"
+          # Save path for packaging
+          echo "DLL_PATH=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Package
         shell: pwsh
+        working-directory: ${{ env.PROJECT_DIR }}
         run: |
-          # Create package
-          New-Item -ItemType Directory -Force -Path "release"
-          Copy-Item "bin/Release/SupplyMissionHelper.dll" -Destination "release/"
-          Copy-Item "SupplyMissionHelper.json" -Destination "release/"
-          Compress-Archive -Path "release/*" -DestinationPath "SupplyMissionHelper.zip" -Force
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force -Path "release" | Out-Null
+          Copy-Item "$env:DLL_PATH" -Destination "release\"
+          Copy-Item "SupplyMissionHelper.json" -Destination "release\"
+          Compress-Archive -Path "release\*" -DestinationPath "SupplyMissionHelper.zip" -Force
+          Write-Host "Created package: $(Resolve-Path .\SupplyMissionHelper.zip)"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: SupplyMissionHelper
-          path: SupplyMissionHelper.zip
+          path: ${{ env.PROJECT_DIR }}\SupplyMissionHelper.zip
 
       - name: Create Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v1
         with:
-          files: SupplyMissionHelper.zip
+          files: ${{ env.PROJECT_DIR }}\SupplyMissionHelper.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

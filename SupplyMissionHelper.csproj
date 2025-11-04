@@ -1,18 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Bring in the Dalamud v13 MSBuild SDK -->
-  <Sdk Name="Dalamud.NET.Sdk" Version="13.1.0" />
-
   <PropertyGroup>
-    <Authors>ahaberman25</Authors>
-    <Company>ahaberman25</Company>
-    <Version>1.0.0</Version>
-    <Description>Calculate materials needed for Grand Company Supply Missions</Description>
-    <PackageProjectUrl>https://github.com/ahaberman25/Supply-Mission-Helper</PackageProjectUrl>
-
-    <!-- v13 runs on .NET 9 -->
-    <TargetFramework>net9.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows</TargetFramework>
     <Platforms>x64</Platforms>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -20,8 +10,48 @@
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
 
-    <!-- Optional but tidy to declare -->
+    <Authors>ahaberman25</Authors>
+    <Company>ahaberman25</Company>
+    <Version>1.0.0</Version>
+    <Description>Calculate materials needed for Grand Company Supply Missions</Description>
+    <PackageProjectUrl>https://github.com/ahaberman25/Supply-Mission-Helper</PackageProjectUrl>
+
+    <!-- Optional; mainly used by packagers. Safe to keep or remove. -->
     <DalamudApiLevel>13</DalamudApiLevel>
   </PropertyGroup>
+
+  <!-- All references must be resolvable via $(DalamudLibPath)\ set by CI -->
+  <ItemGroup>
+    <Reference Include="Dalamud">
+      <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Dalamud.Plugin">
+      <HintPath>$(DalamudLibPath)Dalamud.Plugin.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Dalamud.Plugin.Services">
+      <HintPath>$(DalamudLibPath)Dalamud.Plugin.Services.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <Reference Include="ImGui.NET">
+      <HintPath>$(DalamudLibPath)ImGui.NET.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+
+    <Reference Include="Lumina">
+      <HintPath>$(DalamudLibPath)Lumina.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Lumina.Excel">
+      <HintPath>$(DalamudLibPath)Lumina.Excel.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="Lumina.Excel.GeneratedSheets">
+      <HintPath>$(DalamudLibPath)Lumina.Excel.GeneratedSheets.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
 
 </Project>
