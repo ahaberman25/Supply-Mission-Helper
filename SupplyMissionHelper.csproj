@@ -47,6 +47,16 @@
       <HintPath>$(DalamudLibPath)FFXIVClientStructs.dll</HintPath>
       <Private>false</Private>
     </Reference>
+      <!-- ImGui.NET (required for ImGui bindings like ImGui.Text/Checkbox/etc.) -->
+    <Reference Include="ImGui.NET">
+      <HintPath>$(DalamudLibPath)ImGui.NET.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <!-- Dalamud.Interface (commonly used alongside ImGui) -->
+    <Reference Include="Dalamud.Interface">
+      <HintPath>$(DalamudLibPath)Dalamud.Interface.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
   </ItemGroup>
 
 </Project>
