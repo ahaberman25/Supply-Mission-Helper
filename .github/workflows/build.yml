@@ -17,10 +17,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup .NET
+      - name: Setup .NET 9
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'
+          dotnet-version: '9.0.x'
 
       - name: Download Dalamud
         shell: pwsh
@@ -30,8 +30,10 @@ jobs:
           Invoke-WebRequest -Uri "https://goatcorp.github.io/dalamud-distrib/latest.zip" -OutFile "dalamud.zip"
           Expand-Archive -Path "dalamud.zip" -DestinationPath $env:DALAMUD_HOME -Force
           
-          Write-Host "Dalamud files:"
-          Get-ChildItem $env:DALAMUD_HOME | Select-Object Name
+          Write-Host "`nDalamud files extracted. Checking for ImGui..."
+          if (Test-Path "$env:DALAMUD_HOME\Dalamud.Bindings.ImGui.dll") {
+            Write-Host "✓ Found Dalamud.Bindings.ImGui.dll"
+          }
 
       - name: Restore dependencies
         run: dotnet restore
@@ -50,7 +52,7 @@ jobs:
           $manifest | ConvertTo-Json -Depth 10 | Set-Content "SupplyMissionHelper.json"
           
           New-Item -ItemType Directory -Force -Path "release"
-          Copy-Item "bin\Release\net8.0-windows\SupplyMissionHelper.dll" -Destination "release\"
+          Copy-Item "bin\Release\net9.0-windows\SupplyMissionHelper.dll" -Destination "release\"
           Copy-Item "SupplyMissionHelper.json" -Destination "release\"
           Compress-Archive -Path "release\*" -DestinationPath "SupplyMissionHelper.zip" -Force
 

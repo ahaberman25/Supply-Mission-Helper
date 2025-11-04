@@ -1,23 +1,22 @@
 <?xml version="1.0" encoding="utf-8"?>
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <Authors>YourName</Authors>
-    <Company>YourName</Company>
+    <Authors>ahaberman25</Authors>
+    <Company>ahaberman25</Company>
     <Version>0.0.1</Version>
     <Description>A plugin to help calculate materials needed for Grand Company Supply Missions</Description>
-    <Copyright>Copyright © 2024 YourName</Copyright>
-    <PackageProjectUrl>https://github.com/yourusername/SupplyMissionHelper</PackageProjectUrl>
+    <Copyright>Copyright © 2024 ahaberman25</Copyright>
+    <PackageProjectUrl>https://github.com/ahaberman25/Supply-Mission-Helper</PackageProjectUrl>
   </PropertyGroup>
 
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net9.0-windows</TargetFramework>
     <Platforms>x64</Platforms>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <ProduceReferenceAssembly>false</ProduceReferenceAssembly>
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
-    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
     <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
   </PropertyGroup>
 
@@ -34,8 +33,8 @@
       <HintPath>$(DalamudLibPath)Dalamud.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="ImGui.NET">
-      <HintPath>$(DalamudLibPath)ImGui.NET.dll</HintPath>
+    <Reference Include="Dalamud.Bindings.ImGui">
+      <HintPath>$(DalamudLibPath)Dalamud.Bindings.ImGui.dll</HintPath>
       <Private>false</Private>
     </Reference>
     <Reference Include="ImGuiScene">
@@ -55,9 +54,5 @@
       <Private>false</Private>
     </Reference>
   </ItemGroup>
-
-  <Target Name="PackagePlugin" AfterTargets="Build" Condition="'$(Configuration)' == 'Release'">
-    <DalamudPackager ProjectDir="$(ProjectDir)" OutputPath="$(OutputPath)" AssemblyName="$(AssemblyName)" MakeZip="true" />
-  </Target>
 
 </Project>
