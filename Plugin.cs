@@ -33,12 +33,14 @@ namespace SupplyMissionHelper
 
             _config = _pi.GetPluginConfig() as Configuration ?? new Configuration();
             _config.Initialize(_pi);
-
+            // ...
             var scanner = new MissionScanner(_gameGui, _data, _log);
             var calculator = new RecipeCalculator(_data, _log);
 
-            _mainWindow = new MainWindow(_config, scanner, calculator);
+            // ✨ pass _log into MainWindow
+            _mainWindow = new MainWindow(_config, scanner, calculator, _log);
             _windows.AddWindow(_mainWindow);
+            // ...
 
             _commands.AddHandler("/supplymission", new Dalamud.Game.Command.CommandInfo(OnCommand)
             {
