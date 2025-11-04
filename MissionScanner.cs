@@ -8,30 +8,35 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 namespace SupplyMissionHelper
 {
     /// <summary>
-    /// Scans the GC "Supply & Provisioning Missions" (ContentsInfoDetail) window.
-    /// Uses stable NodeIds for headers/rows and fixed child indices per row:
-    ///   - child #4  = item name
-    ///   - child #7  = requested amount
-    ///   - child #8  = on-hand amount
+    /// Scans GC "Supply & Provisioning Missions" (ContentsInfoDetail).
+    /// Strategy:
+    ///  - Prefer NodeId-anchored rows when known (fast path).
+    ///  - Otherwise, auto-discover row components between headers by structure:
+    ///       * NodeType.Component with >= 9 children
+    ///       * child #4: item name (text)
+    ///       * child #7: requested (integer)
+    ///       * child #8: on-hand (integer, optional)
+    ///  - Logs diagnostics for row NodeIds so we can hardcode them later.
     /// </summary>
     public sealed unsafe class MissionScanner
     {
         private readonly IGameGui _gameGui;
-        private readonly IDataManager _data;   // reserved for future Lumina lookups
+        private readonly IDataManager _data; // reserved for Lumina lookups later
         private readonly IPluginLog _log;
 
-        // The GC mission list lives inside this addon.
+        // Target addon
         private static readonly string[] TargetAddons = { "ContentsInfoDetail" };
 
-        // Header TextNode NodeIds (stable per your inspection)
+        // Header TextNode NodeIds you found (stable)
         private const uint SUPPLY_HEADER_NODEID       = 3u;   // "Supply Missions"
         private const uint PROVISIONING_HEADER_NODEID = 16u;  // "Provisioning Missions"
 
-        // Row Base Component NodeIds (stable per your inspection)
-        private static readonly uint[] SUPPLY_ROW_NODEIDS       = { 6u, 7u, 8u, 9u, 10u, 11u, 12u, 13u };
-        private static readonly uint[] PROVISIONING_ROW_NODEIDS = { 17u, 18u, 19u };
+        // Known row NodeIds (may vary per UI build/GC variant — start empty & learn)
+        // If you later confirm your NodeIds, put them here to skip heuristic.
+        private static readonly uint[] SUPPLY_ROW_NODEIDS       = { /* e.g., 6u,7u,8u,... */ };
+        private static readonly uint[] PROVISIONING_ROW_NODEIDS = { /* e.g., 17u,18u,19u */ };
 
-        // Child text indices inside a row component
+        // Child indices inside each row component
         private const int CHILD_INDEX_NAME      = 4;
         private const int CHILD_INDEX_REQUESTED = 7;
         private const int CHILD_INDEX_ONHAND    = 8;
@@ -83,28 +88,52 @@ namespace SupplyMissionHelper
                 return results;
             }
 
-            // Try to locate headers (for better status/diagnostics). Not strictly required for parsing.
+            // Find headers (we use them for heuristic bounds + better status)
             var haveHeaders = TryFindHeaderIndices(unit, out var supplyHeaderIdx, out var provisioningHeaderIdx);
 
-            // Gather rows by NodeId (robust, avoids layout guessing)
-            var supplyRows       = CollectRowComponentsByNodeId(unit, SUPPLY_ROW_NODEIDS);
-            var provisioningRows = CollectRowComponentsByNodeId(unit, PROVISIONING_ROW_NODEIDS);
+            // 1) Try NodeId-anchored rows if arrays are populated
+            var supplyRows = SUPPLY_ROW_NODEIDS.Length > 0
+                ? CollectRowComponentsByNodeId(unit, SUPPLY_ROW_NODEIDS)
+                : new List<nint>();
 
-            _log.Info($"[SMH] Found {supplyRows.Count} supply-row nodes and {provisioningRows.Count} provisioning-row nodes by NodeId. HeadersFound={haveHeaders}");
+            var provisioningRows = PROVISIONING_ROW_NODEIDS.Length > 0
+                ? CollectRowComponentsByNodeId(unit, PROVISIONING_ROW_NODEIDS)
+                : new List<nint>();
 
-            // Parse each row into Name / Requested / OnHand
+            _log.Info($"[SMH] NodeId path found {supplyRows.Count} supply rows, {provisioningRows.Count} provisioning rows. HeadersFound={haveHeaders}");
+
+            // 2) Heuristic fallback if NodeId path yields nothing
+            if (supplyRows.Count == 0 || provisioningRows.Count == 0)
+            {
+                if (haveHeaders)
+                {
+                    var hSupply = supplyHeaderIdx;
+                    var hProv   = provisioningHeaderIdx;
+
+                    if (supplyRows.Count == 0)
+                        supplyRows = CollectRowComponentsHeuristic(unit, hSupply, hProv, "Supply");
+
+                    if (provisioningRows.Count == 0)
+                        provisioningRows = CollectRowComponentsHeuristic(unit, hProv, unit->UldManager.NodeListCount, "Provisioning");
+                }
+                else
+                {
+                    _log.Info("[SMH] Headers not found — unable to run heuristic row discovery.");
+                }
+            }
+
+            // Parse rows
             ParseRowComponents(supplyRows, "Supply", results);
             ParseRowComponents(provisioningRows, "Provisioning", results);
 
             if (results.Count == 0)
             {
-                // Prefer an explicit capped message if present
                 if (WindowContains(unit, "No more deliveries are being accepted today"))
                     status = "No missions available today.";
                 else if (!haveHeaders)
                     status = "GC view detected, but section headers not found (UI variant?).";
                 else
-                    status = "No active mission rows detected (likely daily cap or empty).";
+                    status = "No active mission rows detected (UI layout variant or daily cap).";
                 return results;
             }
 
@@ -132,7 +161,7 @@ namespace SupplyMissionHelper
             supplyHeaderIdx = -1;
             provisioningHeaderIdx = -1;
 
-            // Prefer exact NodeId matches (most stable)
+            // Prefer NodeId (stable)
             for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
                 var node = unit->UldManager.NodeList[i];
@@ -145,7 +174,7 @@ namespace SupplyMissionHelper
                     provisioningHeaderIdx = i;
             }
 
-            // Fallback to text matching (future-proof, different locales may need localization)
+            // Fallback to text match (localized clients may need localized strings)
             if (supplyHeaderIdx < 0 || provisioningHeaderIdx < 0)
             {
                 for (var i = 0; i < unit->UldManager.NodeListCount; i++)
@@ -167,7 +196,7 @@ namespace SupplyMissionHelper
                 }
             }
 
-            // Ensure order supply < provisioning
+            // Ensure supply before provisioning
             if (supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0 &&
                 supplyHeaderIdx > provisioningHeaderIdx)
             {
@@ -177,6 +206,7 @@ namespace SupplyMissionHelper
             return supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0;
         }
 
+        // Fast path (if we know the NodeIds for rows)
         private static List<nint> CollectRowComponentsByNodeId(AtkUnitBase* unit, IReadOnlyCollection<uint> wantedNodeIds)
         {
             var rows = new List<nint>();
@@ -198,11 +228,69 @@ namespace SupplyMissionHelper
             return rows;
         }
 
+        // Heuristic discovery between two indices (exclusive start, exclusive end)
+        private List<nint> CollectRowComponentsHeuristic(AtkUnitBase* unit, int startExclusive, int endExclusive, string sectionLabel)
+        {
+            var rows = new List<nint>();
+            var max  = unit->UldManager.NodeListCount;
+
+            startExclusive = Math.Clamp(startExclusive, -1, max);
+            endExclusive   = Math.Clamp(endExclusive, 0,  max);
+
+            for (var i = startExclusive + 1; i < endExclusive; i++)
+            {
+                var node = unit->UldManager.NodeList[i];
+                if (node == null) continue;
+
+                // Stop if another header text pops up
+                if (node->Type == NodeType.Text)
+                {
+                    var t = (AtkTextNode*)node;
+                    if (t->NodeText.StringPtr != null)
+                    {
+                        var s = t->NodeText.ToString().Trim();
+                        if (s.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase) ||
+                            s.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase))
+                            break;
+                    }
+                }
+
+                if (node->Type != NodeType.Component) continue;
+                var compNode = (AtkComponentNode*)node;
+                if (compNode->Component == null) continue;
+
+                var uld = compNode->Component->UldManager;
+                if (uld.NodeList == null || uld.NodeListCount < 9) continue; // need indices 0..8 at least
+
+                // Quick read child #4, #7, #8
+                ReadTextAt(uld, CHILD_INDEX_NAME, out var nameCandidate);
+                var looksName = !string.IsNullOrWhiteSpace(nameCandidate);
+
+                var requestedOk = TryReadIntAt(uld, CHILD_INDEX_REQUESTED, out var requestedVal);
+                var onHandOk    = TryReadIntAt(uld, CHILD_INDEX_ONHAND, out var onHandVal);
+
+                // Accept if it matches expected shape (name + at least requested int)
+                if (looksName && requestedOk)
+                {
+                    rows.Add((nint)compNode);
+                    _log.Info($"[SMH] Heuristic {sectionLabel} row candidate: NodeId={node->NodeId}, name='{nameCandidate?.Trim()}', req={requestedVal}, have={(onHandOk ? onHandVal : 0)}");
+                }
+                else
+                {
+                    // Emit a lighter trace so we can learn structure if needed
+                    _log.Debug($"[SMH] Skipped {sectionLabel} candidate NodeId={node->NodeId} (children={uld.NodeListCount}) nameOK={looksName} reqOK={requestedOk}");
+                }
+            }
+
+            _log.Info($"[SMH] Heuristic discovered {rows.Count} {sectionLabel} rows.");
+            return rows;
+        }
+
         private static void ParseRowComponents(IEnumerable<nint> rows, string section, List<MissionItem> sink)
         {
             foreach (var rowPtr in rows)
             {
-                var compNode = (AtkComponentNode*)rowPtr;   // cast back to pointer
+                var compNode = (AtkComponentNode*)rowPtr;
                 if (compNode == null || compNode->Component == null) continue;
 
                 var uld = compNode->Component->UldManager;
@@ -212,7 +300,7 @@ namespace SupplyMissionHelper
                 int requested = 0;
                 int onHand = 0;
 
-                // Read fixed child indices (fast path)
+                // Fast path: fixed indices
                 ReadTextAt(uld, CHILD_INDEX_NAME, out var nameCandidate);
                 if (!string.IsNullOrWhiteSpace(nameCandidate))
                     name = nameCandidate!.Trim();
@@ -220,7 +308,7 @@ namespace SupplyMissionHelper
                 if (TryReadIntAt(uld, CHILD_INDEX_REQUESTED, out var req)) requested = req;
                 if (TryReadIntAt(uld, CHILD_INDEX_ONHAND, out var have))   onHand   = have;
 
-                // Fallback: scan all text nodes if needed (handles slight layout shifts)
+                // Fallback scan (if layout differs slightly)
                 if (name is null || requested == 0)
                 {
                     for (var j = 0; j < uld.NodeListCount; j++)
@@ -233,9 +321,7 @@ namespace SupplyMissionHelper
 
                         var s = t->NodeText.ToString().Trim();
                         if (string.IsNullOrWhiteSpace(s)) continue;
-
-                        // Ignore the fraction column like "0/20"
-                        if (LooksLikeFraction(s)) continue;
+                        if (LooksLikeFraction(s)) continue; // skip "0/20"
 
                         if (requested == 0 && IsNumeric(s) &&
                             int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
@@ -246,27 +332,6 @@ namespace SupplyMissionHelper
 
                         if (name is null || s.Length > name.Length)
                             name = s;
-                    }
-                }
-
-                // If on-hand still unknown, try to infer another clean int different from requested
-                if (onHand == 0)
-                {
-                    for (var j = 0; j < uld.NodeListCount; j++)
-                    {
-                        var n = uld.NodeList[j];
-                        if (n == null || n->Type != NodeType.Text) continue;
-
-                        var t = (AtkTextNode*)n;
-                        if (t->NodeText.StringPtr == null) continue;
-
-                        var s = t->NodeText.ToString().Trim();
-                        if (string.IsNullOrWhiteSpace(s) || LooksLikeFraction(s)) continue;
-
-                        if (IsNumeric(s) && int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
-                        {
-                            if (iv != requested) { onHand = iv; break; }
-                        }
                     }
                 }
 
@@ -344,7 +409,7 @@ namespace SupplyMissionHelper
     {
         public string? Name   { get; set; }
         public int     Quantity { get; set; } // requested
-        public int     OnHand   { get; set; } // how many you currently have
+        public int     OnHand   { get; set; } // on-hand
         public uint    ItemId   { get; set; } // future: Lumina lookup
         public string? Section  { get; set; } // "Supply" or "Provisioning"
     }
