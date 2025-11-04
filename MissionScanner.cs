@@ -81,7 +81,7 @@ namespace SupplyMissionHelper
             var supplyRows       = new List<MissionItem>();
             var provisioningRows = new List<MissionItem>();
 
-            // 🔹 Scan EVERYTHING between headers, recursively
+            // Scan EVERYTHING between headers, recursively
             for (int i = hiIdx - 1; i > loIdx; i--)
             {
                 var node = unit->UldManager.NodeList[i];
@@ -89,7 +89,7 @@ namespace SupplyMissionHelper
                 RecurseNode(node, supplyRows, "Supply");
             }
 
-            // 🔹 Then scan everything below the lower header for provisioning
+            // Then scan everything below the lower header for provisioning
             for (int i = loIdx - 1; i >= 0; i--)
             {
                 var node = unit->UldManager.NodeList[i];
@@ -111,14 +111,16 @@ namespace SupplyMissionHelper
                 return results;
             }
 
+            // Merge dupes by Section+Name, keep first ItemId (currently 0)
             results = results
                 .GroupBy(r => $"{r.Section}|{r.Name}")
                 .Select(g => new MissionItem
                 {
-                    Section = g.First().Section,
-                    Name = g.First().Name,
+                    Section  = g.First().Section,
+                    Name     = g.First().Name,
                     Quantity = g.Sum(x => x.Quantity),
-                    OnHand = g.Sum(x => x.OnHand)
+                    OnHand   = g.Sum(x => x.OnHand),
+                    ItemId   = g.First().ItemId
                 })
                 .ToList();
 
@@ -126,7 +128,7 @@ namespace SupplyMissionHelper
             return results;
         }
 
-        // 🔸 Recursively searches every child component for a row
+        // Recursively searches every child component for a row
         private void RecurseNode(AtkResNode* node, List<MissionItem> sink, string section)
         {
             if (node == null) return;
@@ -168,13 +170,14 @@ namespace SupplyMissionHelper
                 TryReadIntAt(uld, CHILD_INDEX_REQUESTED, out var requested))
             {
                 TryReadIntAt(uld, CHILD_INDEX_ONHAND, out var onHand);
-                item.Name = name.Trim();
+                item.Name     = name.Trim();
                 item.Quantity = requested;
-                item.OnHand = onHand;
+                item.OnHand   = onHand;
+                item.ItemId   = 0; // TODO: Lumina lookup mapping from name -> ItemId
                 return true;
             }
 
-            // fallback: pattern match any component containing text + numbers
+            // Fallback: heuristic
             string? bestName = null;
             int req = 0, have = 0;
 
@@ -189,8 +192,8 @@ namespace SupplyMissionHelper
 
                 if (IsNumeric(s))
                 {
-                    if (req == 0) req = int.Parse(s);
-                    else have = int.Parse(s);
+                    if (req == 0) req = int.Parse(s, CultureInfo.InvariantCulture);
+                    else have = int.Parse(s, CultureInfo.InvariantCulture);
                 }
                 else if (!s.Contains("Mission", StringComparison.OrdinalIgnoreCase))
                 {
@@ -200,9 +203,10 @@ namespace SupplyMissionHelper
 
             if (!string.IsNullOrEmpty(bestName) && req > 0)
             {
-                item.Name = bestName;
+                item.Name     = bestName;
                 item.Quantity = req;
-                item.OnHand = have;
+                item.OnHand   = have;
+                item.ItemId   = 0;
                 return true;
             }
 
@@ -230,10 +234,11 @@ namespace SupplyMissionHelper
             var t = (AtkTextNode*)n;
             if (t->NodeText.StringPtr == null) return false;
             var s = t->NodeText.ToString().Trim();
-            return int.TryParse(s, out value);
+            return int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out value);
         }
 
-        private static bool IsNumeric(string s) => int.TryParse(s, out _);
+        private static bool IsNumeric(string s)
+            => int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out _);
 
         private static bool WindowContains(AtkUnitBase* unit, string needle)
         {
@@ -241,8 +246,10 @@ namespace SupplyMissionHelper
             {
                 var node = unit->UldManager.NodeList[i];
                 if (node == null || node->Type != NodeType.Text) continue;
+
                 var t = (AtkTextNode*)node;
                 if (t->NodeText.StringPtr == null) continue;
+
                 var s = t->NodeText.ToString();
                 if (!string.IsNullOrEmpty(s) &&
                     s.IndexOf(needle, StringComparison.OrdinalIgnoreCase) >= 0)
@@ -260,12 +267,15 @@ namespace SupplyMissionHelper
             {
                 var node = unit->UldManager.NodeList[i];
                 if (node == null || node->Type != NodeType.Text) continue;
+
                 var t = (AtkTextNode*)node;
                 if (t->NodeText.StringPtr == null) continue;
+
                 var s = t->NodeText.ToString().Trim();
 
                 if (supplyHeaderIdx < 0 && s.Contains("Supply Mission", StringComparison.OrdinalIgnoreCase))
                     supplyHeaderIdx = i;
+
                 if (provisioningHeaderIdx < 0 && s.Contains("Provisioning Mission", StringComparison.OrdinalIgnoreCase))
                     provisioningHeaderIdx = i;
             }
@@ -280,5 +290,6 @@ namespace SupplyMissionHelper
         public int Quantity { get; set; }
         public int OnHand { get; set; }
         public string? Section { get; set; }
+        public uint ItemId { get; set; } // default 0; filled later via Lumina
     }
 }
