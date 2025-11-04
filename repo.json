@@ -5,7 +5,8 @@
     "Punchline": "Calculate materials needed for Grand Company Supply Missions",
     "Description": "This plugin helps you track and calculate materials needed for your daily Grand Company Supply Missions.",
     "InternalName": "SupplyMissionHelper",
-    "AssemblyVersion": "1.0.0",
+    "AssemblyVersion": "1.0.0.0",
+    "TestingAssemblyVersion": "1.0.0.0",
     "RepoUrl": "https://github.com/ahaberman25/Supply-Mission-Helper",
     "ApplicableVersion": "any",
     "Tags": [
@@ -14,13 +15,22 @@
       "Helper",
       "Supply Missions"
     ],
+    "CategoryTags": [
+      "other"
+    ],
     "DalamudApiLevel": 10,
     "IconUrl": "",
     "ImageUrls": [],
     "DownloadLinkInstall": "https://github.com/ahaberman25/Supply-Mission-Helper/releases/latest/download/SupplyMissionHelper.zip",
     "DownloadLinkUpdate": "https://github.com/ahaberman25/Supply-Mission-Helper/releases/latest/download/SupplyMissionHelper.zip",
     "DownloadLinkTesting": "https://github.com/ahaberman25/Supply-Mission-Helper/releases/latest/download/SupplyMissionHelper.zip",
+    "IsHide": false,
+    "IsTestingExclusive": false,
     "DownloadCount": 0,
-    "LastUpdated": "0"
+    "LastUpdated": "0",
+    "LoadPriority": 0,
+    "LoadRequiredState": 0,
+    "LoadSync": false,
+    "CanUnloadAsync": false
   }
 ]
