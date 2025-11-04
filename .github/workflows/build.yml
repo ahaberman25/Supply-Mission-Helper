@@ -11,36 +11,40 @@ jobs:
     runs-on: windows-latest
     env:
       DALAMUD_HOME: ${{ github.workspace }}\dalamud
-      PROJECT_DIR: Supply-Mission-Helper       # <-- adjust if your csproj is not in this folder
+      PROJECT_DIR: .                      # << if your .csproj is in the repo root; change if not
       PROJECT_FILE: SupplyMissionHelper.csproj
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Show workspace (debug)
+        shell: pwsh
+        run: |
+          Write-Host "GITHUB_WORKSPACE=$env:GITHUB_WORKSPACE"
+          Get-ChildItem -Recurse -Depth 2 | Select-Object FullName
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '8.0.x'              # <-- match your csproj TFM (change if needed)
+          dotnet-version: '8.0.x'         # match your .csproj TFM
 
       - name: Download Dalamud distributable
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $dl = "https://goatcorp.github.io/dalamud-distrib/latest.zip"
-          Invoke-WebRequest -Uri $dl -OutFile latest.zip
+          Invoke-WebRequest -Uri https://goatcorp.github.io/dalamud-distrib/latest.zip -OutFile latest.zip
           New-Item -ItemType Directory -Force -Path "$env:DALAMUD_HOME" | Out-Null
           Expand-Archive -Path latest.zip -DestinationPath "$env:DALAMUD_HOME" -Force
-          Write-Host "Expanded Dalamud to: $env:DALAMUD_HOME"
-          Write-Host "Tree:"
-          Get-ChildItem "$env:DALAMUD_HOME" -Recurse | Select-Object FullName
+          Write-Host "Expanded: $env:DALAMUD_HOME"
+          Get-ChildItem "$env:DALAMUD_HOME\bin" | Select-Object FullName
 
       - name: Build
         shell: pwsh
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $DalamudLibPath = (Join-Path "$env:DALAMUD_HOME" "bin\")  # must end with slash
+          $DalamudLibPath = (Join-Path "$env:DALAMUD_HOME" "bin\")
           Write-Host "DalamudLibPath=$DalamudLibPath"
           dotnet build ".\$env:PROJECT_FILE" -c Release /p:DalamudLibPath="$DalamudLibPath"
 
@@ -49,15 +53,13 @@ jobs:
         working-directory: ${{ env.PROJECT_DIR }}
         run: |
           $ErrorActionPreference = 'Stop'
-          # Find the produced DLL under bin/Release/**/SupplyMissionHelper.dll
           $dll = Get-ChildItem -Path "bin\Release" -Recurse -Filter "SupplyMissionHelper.dll" | Select-Object -First 1
           if (-not $dll) {
             Write-Host "Contents of bin/Release:"
             Get-ChildItem "bin\Release" -Recurse | Select-Object FullName
             throw "Build output not found."
           }
-          Write-Host "✓ Build output found at $($dll.FullName)"
-          # Save path for packaging
+          Write-Host "✓ Found $($dll.FullName)"
           echo "DLL_PATH=$($dll.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Package
