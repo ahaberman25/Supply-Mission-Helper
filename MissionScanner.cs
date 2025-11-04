@@ -8,27 +8,28 @@ using FFXIVClientStructs.FFXIV.Component.GUI;
 namespace SupplyMissionHelper
 {
     /// <summary>
-    /// Scanner that reads GC "Supply & Provisioning Missions" from ContentsInfoDetail.
-    /// Uses top-level NodeList *indices* (not NodeIds) to split sections, based on
-    /// observed layout:
-    ///   - One header (e.g., Provisioning) near the top (higher index)
-    ///   - Then Supply rows (indices strictly between the two headers, descending)
-    ///   - Then Supply header (lower index)
-    ///   - Then Provisioning rows (below the Supply header, further descending)
-    /// Child mapping inside each row component:
-    ///   - #4  = item name (text)
-    ///   - #7  = requested (int)
-    ///   - #8  = on-hand  (int, optional)
+    /// Reads GC "Supply & Provisioning Missions" from ContentsInfoDetail.
+    /// Strategy:
+    ///   1) Find the two section headers by text ("Supply Missions", "Provisioning Missions").
+    ///   2) Treat the *index bands* as authoritative:
+    ///        - Supply rows:     strictly between the two headers (descending indices).
+    ///        - Provisioning rows: below the lower header (descending indices).
+    ///   3) For each top-level node in those bands, recursively search *all nested components*
+    ///      for a "row-like" component that fits the child pattern:
+    ///         #4  = item name (text)
+    ///         #7  = requested (int)
+    ///         #8  = on-hand  (int, optional)
+    ///   4) Log discoveries so we can lock fast paths later if desired.
     /// </summary>
     public sealed unsafe class MissionScanner
     {
         private readonly IGameGui _gameGui;
-        private readonly IDataManager _data;   // reserved for Lumina lookups later
+        private readonly IDataManager _data; // reserved for Lumina lookups later
         private readonly IPluginLog _log;
 
         private static readonly string[] TargetAddons = { "ContentsInfoDetail" };
 
-        // Child text indices inside a row component
+        // Child indices inside a mission row component
         private const int CHILD_INDEX_NAME      = 4;
         private const int CHILD_INDEX_REQUESTED = 7;
         private const int CHILD_INDEX_ONHAND    = 8;
@@ -83,58 +84,51 @@ namespace SupplyMissionHelper
             var nodeCount = unit->UldManager.NodeListCount;
             _log.Info($"[SMH] Top NodeListCount={nodeCount}");
 
-            // Find headers by TEXT (index-based splitting is all we need)
             if (!TryFindHeaderIndicesByText(unit, out var supplyHeaderIdx, out var provisioningHeaderIdx))
             {
                 status = "Headers not found (localization/variant).";
                 return results;
             }
 
-            // Ensure header ordering (we expect provisioning header above supply header by index)
+            // We don’t rely on which header is “higher” by meaning — we use index bands only.
             var hiIdx = Math.Max(supplyHeaderIdx, provisioningHeaderIdx);
             var loIdx = Math.Min(supplyHeaderIdx, provisioningHeaderIdx);
-            var hiHeaderName = hiIdx == provisioningHeaderIdx ? "ProvisioningHeader" : "SupplyHeader";
-            var loHeaderName = loIdx == supplyHeaderIdx ? "SupplyHeader" : "ProvisioningHeader";
-            _log.Info($"[SMH] Headers: {hiHeaderName}={hiIdx}, {loHeaderName}={loIdx}");
 
-            // Based on your observation:
-            // - Supply rows are strictly between hiIdx and loIdx (descending)
-            // - Provisioning rows are below the supply header (i < loIdx), descending
-            var supplyRows       = new List<MissionItem>();
-            var provisioningRows = new List<MissionItem>();
+            _log.Info($"[SMH] Headers: SupplyHeader={supplyHeaderIdx}, ProvisioningHeader={provisioningHeaderIdx}");
 
-            // 1) Supply band: (hiIdx - 1) down to (loIdx + 1)
+            // -------- Deep scan bands --------
+            var supplyFound       = new List<MissionItem>();
+            var provisioningFound = new List<MissionItem>();
+
+            // Supply band: strictly between headers
+            int supplyScanComponents = 0;
             for (int i = hiIdx - 1; i > loIdx; i--)
             {
                 var node = unit->UldManager.NodeList[i];
                 if (node == null || node->Type != NodeType.Component) continue;
 
-                if (TryParseRowFromComponent((AtkComponentNode*)node, out var item))
-                {
-                    item.Section = "Supply";
-                    supplyRows.Add(item);
-                    _log.Info($"[SMH] SUPPLY row at idx={i}: '{item.Name}' req={item.Quantity} have={item.OnHand}");
-                }
+                supplyScanComponents++;
+                var comp = (AtkComponentNode*)node;
+                DeepCollectRows(comp, supplyFound, "Supply");
             }
+            _log.Info($"[SMH] Supply band scanned {supplyScanComponents} top-level components, rows={supplyFound.Count}");
 
-            // 2) Provisioning band: walk below the lower header (loIdx - 1 .. 0) until rows stop parsing
-            //    (we don't know exact count, so just try all; non-rows will be skipped)
+            // Provisioning band: below the lower header
+            int provScanComponents = 0;
             for (int i = loIdx - 1; i >= 0; i--)
             {
                 var node = unit->UldManager.NodeList[i];
                 if (node == null || node->Type != NodeType.Component) continue;
 
-                if (TryParseRowFromComponent((AtkComponentNode*)node, out var item))
-                {
-                    item.Section = "Provisioning";
-                    provisioningRows.Add(item);
-                    _log.Info($"[SMH] PROVISIONING row at idx={i}: '{item.Name}' req={item.Quantity} have={item.OnHand}");
-                }
+                provScanComponents++;
+                var comp = (AtkComponentNode*)node;
+                DeepCollectRows(comp, provisioningFound, "Provisioning");
             }
+            _log.Info($"[SMH] Provisioning band scanned {provScanComponents} top-level components, rows={provisioningFound.Count}");
 
             // Collate
-            results.AddRange(supplyRows);
-            results.AddRange(provisioningRows);
+            results.AddRange(supplyFound);
+            results.AddRange(provisioningFound);
 
             if (results.Count == 0)
             {
@@ -145,7 +139,7 @@ namespace SupplyMissionHelper
                 return results;
             }
 
-            // Merge duplicates defensively
+            // Merge duplicates defensively (by Section+Name)
             results = results
                 .GroupBy(r => (r.Section ?? "") + "||" + (r.Name ?? ""))
                 .Select(g => new MissionItem
@@ -162,14 +156,14 @@ namespace SupplyMissionHelper
             return results;
         }
 
-        // -------- internals --------
+        // ---------------- internals ----------------
 
         private static bool TryFindHeaderIndicesByText(AtkUnitBase* unit, out int supplyHeaderIdx, out int provisioningHeaderIdx)
         {
             supplyHeaderIdx = -1;
             provisioningHeaderIdx = -1;
 
-            // Pass 1: exact English labels (adjust here if you run non-English client)
+            // Pass 1: exact English labels
             for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
                 var node = unit->UldManager.NodeList[i];
@@ -215,32 +209,37 @@ namespace SupplyMissionHelper
             return supplyHeaderIdx >= 0 && provisioningHeaderIdx >= 0;
         }
 
-        private bool TryParseRowFromComponent(AtkComponentNode* compNode, out MissionItem item)
+        /// <summary>
+        /// Recursively walk a component and its descendants to collect any row-like components.
+        /// </summary>
+        private void DeepCollectRows(AtkComponentNode* root, List<MissionItem> sink, string section)
         {
-            item = new MissionItem();
-            if (compNode == null || compNode->Component == null) return false;
+            if (root == null || root->Component == null) return;
+            var uld = root->Component->UldManager;
 
-            // Try this component's own children
-            if (TryParseRowFromUld(compNode->Component->UldManager, out item))
-                return true;
-
-            // Otherwise: one nested level (some skins wrap a component inside another)
-            var uld = compNode->Component->UldManager;
-            if (uld.NodeList != null && uld.NodeListCount > 0)
+            // Check THIS component for row shape
+            if (TryParseRowFromUld(uld, out var item))
             {
-                for (int j = 0; j < uld.NodeListCount; j++)
-                {
-                    var n = uld.NodeList[j];
-                    if (n == null || n->Type != NodeType.Component) continue;
-                    var nested = (AtkComponentNode*)n;
-                    if (nested->Component == null) continue;
-
-                    if (TryParseRowFromUld(nested->Component->UldManager, out item))
-                        return true;
-                }
+                item.Section = section;
+                sink.Add(item);
+                _log.Info($"[SMH] {section.ToUpperInvariant()} row: '{item.Name}' req={item.Quantity} have={item.OnHand}");
+                // Don’t return — there could be multiple rows under same top-level container (lists)
             }
 
-            return false;
+            // Recurse into children (depth-first)
+            if (uld.NodeList != null && uld.NodeListCount > 0)
+            {
+                for (int i = 0; i < uld.NodeListCount; i++)
+                {
+                    var n = uld.NodeList[i];
+                    if (n == null || n->Type != NodeType.Component) continue;
+
+                    var child = (AtkComponentNode*)n;
+                    if (child->Component == null) continue;
+
+                    DeepCollectRows(child, sink, section);
+                }
+            }
         }
 
         private bool TryParseRowFromUld(AtkUldManager uld, out MissionItem item)
@@ -275,8 +274,7 @@ namespace SupplyMissionHelper
 
                 if (IsNumeric(s) && int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out var iv))
                 {
-                    if (req == 0) req = iv;         // first number we see = requested
-                    else have = iv;                 // second number (if any) = on-hand
+                    if (req == 0) req = iv; else have = iv;
                 }
                 else
                 {
