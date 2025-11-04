@@ -15,9 +15,9 @@ namespace SupplyMissionHelper
 
         // the below exist just to make saving less cumbersome
         [NonSerialized]
-        private DalamudPluginInterface? PluginInterface;
+        private IDalamudPluginInterface? PluginInterface;
 
-        public void Initialize(DalamudPluginInterface pluginInterface)
+        public void Initialize(IDalamudPluginInterface pluginInterface)
         {
             this.PluginInterface = pluginInterface;
         }
