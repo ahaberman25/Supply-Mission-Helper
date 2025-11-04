@@ -47,9 +47,7 @@ jobs:
             exit $exitCode
           }
           
-          Write-Host "=== Build completed successfully ===
-
-"
+          Write-Host "=== Build completed successfully ==="
 
       - name: Verify Build Output
         shell: pwsh
