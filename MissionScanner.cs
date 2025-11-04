@@ -1,240 +1,134 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
-using System.Text.RegularExpressions;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
 namespace SupplyMissionHelper
 {
-    // partial needed because we use [GeneratedRegex]
-    public sealed partial class MissionScanner
+    public sealed unsafe class MissionScanner
     {
         private readonly IGameGui _gameGui;
-        private readonly IDataManager _data;
         private readonly IPluginLog _log;
 
-        // On your client, the GC list is rendered inside ContentsInfoDetail.
-        private static readonly string[] TargetAddons = { "ContentsInfoDetail" };
-
-        // Static labels we should ignore as headers
-        private static readonly string[] HeaderKeywords =
-        {
-            "Supply Missions", "Provisioning Missions", "Requested", "Qty.", "Close"
-        };
-
-        public bool IsReady => _gameGui is not null && _data is not null;
-
-        public MissionScanner(IGameGui gameGui, IDataManager dataManager, IPluginLog log)
+        public MissionScanner(IGameGui gameGui, IPluginLog log)
         {
             _gameGui = gameGui;
-            _data = dataManager;
             _log = log;
         }
 
+        private static readonly string[] TargetAddons = { "ContentsInfoDetail" };
+
         public bool IsSupplyWindowOpen()
         {
-            var ptr = GetAddonPtr(TargetAddons);
-            if (ptr == nint.Zero) return false;
-
-            unsafe
+            foreach (var n in TargetAddons)
             {
-                var unit = (AtkUnitBase*)ptr;
-                var texts = CollectWindowText(unit);
-                return LooksLikeGcSupplyProvisioning(texts);
+                var ptr = _gameGui.GetAddonByName(n, 1);
+                if (ptr != nint.Zero) return true;
+                ptr = _gameGui.GetAddonByName(n, 0);
+                if (ptr != nint.Zero) return true;
             }
-        }
-
-        public List<MissionItem> TryReadMissions(out string? status)
-        {
-            status = null;
-            var results = new List<MissionItem>();
-
-            var ptr = GetAddonPtr(TargetAddons);
-            if (ptr == nint.Zero)
-            {
-                status = "Supply Mission list not detected. Open GC “Supply & Provisioning Missions”.";
-                return results;
-            }
-
-            unsafe
-            {
-                var unit = (AtkUnitBase*)ptr;
-                if (unit == null || unit->UldManager.NodeListCount == 0)
-                {
-                    status = "UI detected, but no nodes were found.";
-                    return results;
-                }
-
-                var allTexts = CollectWindowText(unit);
-                if (allTexts.Count == 0)
-                {
-                    status = "UI detected, but no text was readable.";
-                    return results;
-                }
-
-                if (!LooksLikeGcSupplyProvisioning(allTexts))
-                {
-                    status = "Contents window is open, but it isn’t the GC Supply & Provisioning view.";
-                    return results;
-                }
-
-                // Filter obvious headers/static labels
-                var filtered = allTexts.Where(t => !IsHeaderish(t)).ToList();
-
-                // Parse rows: Name (string) → Requested (int). Ignore the "0/20" Qty column.
-                var section = Section.None;
-                string? currentName = null;
-
-                // Re-establish section as we walk the filtered stream (defensive).
-                foreach (var t in filtered)
-                {
-                    if (t.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase))        { section = Section.Supply; currentName = null; continue; }
-                    if (t.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase)) { section = Section.Provisioning; currentName = null; continue; }
-
-                    // Skip Qty fraction (e.g., "0/20")
-                    if (LooksLikeFraction(t)) continue;
-
-                    if (TryParseInt(t, out var asInt))
-                    {
-                        if (asInt > 0 && !string.IsNullOrEmpty(currentName) && section != Section.None)
-                        {
-                            results.Add(new MissionItem
-                            {
-                                Name     = currentName,
-                                Quantity = asInt,
-                                ItemId   = 0,
-                            });
-                            currentName = null;
-                        }
-                        continue;
-                    }
-
-                    if (IsLikelyName(t))
-                    {
-                        // Names can wrap; keep the longest piece seen for this row
-                        if (string.IsNullOrEmpty(currentName) || t.Length > currentName.Length)
-                            currentName = t;
-                    }
-                }
-
-                if (results.Count == 0)
-                {
-                    // Only now consider the capped message.
-                    var hasCappedText = allTexts.Any(x =>
-                        x.Contains("No more deliveries are being accepted today", StringComparison.OrdinalIgnoreCase));
-
-                    status = hasCappedText
-                        ? "No missions available today."
-                        : "GC view detected, but no rows were parsed (UI variant or layout changed).";
-                    return results;
-                }
-
-                // Merge duplicates by name (safety)
-                results = results
-                    .GroupBy(r => r.Name ?? string.Empty)
-                    .Select(g => new MissionItem
-                    {
-                        Name     = g.Key,
-                        Quantity = g.Sum(x => x.Quantity),
-                        ItemId   = 0
-                    })
-                    .ToList();
-
-                status = $"Parsed {results.Count} mission item(s).";
-                return results;
-            }
-        }
-
-
-        // ---------------- helpers ----------------
-
-        private nint GetAddonPtr(IEnumerable<string> names)
-        {
-            foreach (var n in names)
-            {
-                try
-                {
-                    // Try both indices; some variants bind at 0
-                    var p1 = _gameGui.GetAddonByName(n, 1);
-                    if (p1 != nint.Zero) return p1;
-                    var p0 = _gameGui.GetAddonByName(n, 0);
-                    if (p0 != nint.Zero) return p0;
-                }
-                catch { /* ignore */ }
-            }
-            return nint.Zero;
-        }
-
-        private static bool LooksLikeGcSupplyProvisioning(IReadOnlyList<string> texts)
-        {
-            var hasSupply = texts.Any(t => t.Equals("Supply Missions", StringComparison.OrdinalIgnoreCase));
-            var hasProv   = texts.Any(t => t.Equals("Provisioning Missions", StringComparison.OrdinalIgnoreCase));
-            return hasSupply && hasProv;
-        }
-
-        private static bool IsHeaderish(string s)
-        {
-            if (string.IsNullOrWhiteSpace(s)) return true;
-            foreach (var kw in HeaderKeywords)
-                if (s.Equals(kw, StringComparison.OrdinalIgnoreCase)) return true;
             return false;
         }
 
-        private static bool TryParseInt(string s, out int val)
-            => int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out val);
-
-        private static bool LooksLikeFraction(string s) => FractionRegex().IsMatch(s);
-
-        [GeneratedRegex(@"^\s*\d+\s*\/\s*\d+\s*$")]
-        private static partial Regex FractionRegex();
-
-        private static bool IsLikelyName(string s)
+        public List<MissionItem> TryReadMissions(out string status)
         {
-            if (string.IsNullOrWhiteSpace(s)) return false;
-            if (s.Length <= 1) return false;
-            if (LooksLikeFraction(s)) return false;
-            if (TryParseInt(s, out _)) return false;
-            // exclude tiny label-like tokens
-            if (s.Equals("A", StringComparison.OrdinalIgnoreCase) ||
-                s.Equals("B", StringComparison.OrdinalIgnoreCase) ||
-                s.Equals("C", StringComparison.OrdinalIgnoreCase))
-                return false;
-            return true;
-        }
+            status = "";
+            var list = new List<MissionItem>();
 
-        private unsafe static List<string> CollectWindowText(AtkUnitBase* unit)
-        {
-            var list = new List<string>();
-
-            // Walk flattened NodeList and take all Text nodes (no visibility checks needed)
-            for (var i = 0; i < unit->UldManager.NodeListCount; i++)
+            nint ptr = nint.Zero;
+            foreach (var n in TargetAddons)
             {
-                var node = unit->UldManager.NodeList[i];
-                if (node == null) continue;
+                ptr = _gameGui.GetAddonByName(n, 1);
+                if (ptr == nint.Zero) ptr = _gameGui.GetAddonByName(n, 0);
+                if (ptr != nint.Zero) break;
+            }
+            if (ptr == nint.Zero)
+            {
+                status = "GC mission window not found.";
+                return list;
+            }
 
-                if (node->Type == NodeType.Text)
-                {
-                    var t = (AtkTextNode*)node;
-                    if (t->NodeText.StringPtr == null) continue;
+            var unit = (AtkUnitBase*)ptr;
+            if (unit == null || unit->UldManager.NodeListCount == 0)
+            {
+                status = "Addon found, but node list was empty.";
+                return list;
+            }
 
-                    var s = t->NodeText.ToString();
-                    if (!string.IsNullOrWhiteSpace(s))
-                        list.Add(s.Trim());
-                }
+            // Supply nodes 6–13, Provisioning 17–19
+            ReadMissionGroup(unit, 6, 13, list, "Supply");
+            ReadMissionGroup(unit, 17, 19, list, "Provisioning");
+
+            if (list.Count == 0)
+            {
+                status = "No missions detected (likely daily cap reached).";
+            }
+            else
+            {
+                status = $"Parsed {list.Count} mission items.";
             }
 
             return list;
         }
 
-        private enum Section { None, Supply, Provisioning }
+        private static void ReadMissionGroup(AtkUnitBase* unit, int first, int last, List<MissionItem> list, string section)
+        {
+            for (int i = first; i <= last; i++)
+            {
+                if (i >= unit->UldManager.NodeListCount) break;
+                var node = unit->UldManager.NodeList[i];
+                if (node == null) continue;
+
+                var comp = node->GetAsAtkComponentNode();
+                if (comp == null) continue;
+                if (comp->Component == null) continue;
+
+                var baseComp = comp->Component;
+                var child = baseComp->UldManager.NodeListCount;
+                if (child == 0) continue;
+
+                string? name = null;
+                int qty = 0;
+
+                // loop text nodes inside the component
+                for (var j = 0; j < baseComp->UldManager.NodeListCount; j++)
+                {
+                    var n = baseComp->UldManager.NodeList[j];
+                    if (n == null) continue;
+                    if (n->Type == NodeType.Text)
+                    {
+                        var t = n->GetAsAtkTextNode();
+                        if (t == null || t->NodeText.StringPtr == null) continue;
+                        var text = t->NodeText.ToString().Trim();
+
+                        if (string.IsNullOrWhiteSpace(text)) continue;
+                        if (int.TryParse(text, out var val))
+                            qty = val;
+                        else if (!text.Contains("/"))
+                            name = text;
+                    }
+                }
+
+                if (!string.IsNullOrEmpty(name))
+                {
+                    list.Add(new MissionItem
+                    {
+                        Name = name,
+                        Quantity = qty,
+                        ItemId = 0,
+                        Section = section
+                    });
+                }
+            }
+        }
     }
 
     public sealed class MissionItem
     {
-        public uint   ItemId   { get; set; }
-        public string? Name    { get; set; }
-        public int    Quantity { get; set; } // requested amount
+        public string? Name { get; set; }
+        public int Quantity { get; set; }
+        public uint ItemId { get; set; }
+        public string? Section { get; set; }
     }
 }
