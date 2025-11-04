@@ -89,7 +89,6 @@ namespace SupplyMissionHelper
             _log.Info($"[SMH] Discovered {allRowCandidates.Count} row-like component(s).");
 
             // If we have headers, try to split rows into sections by comparing index proximity:
-            // a row belongs to the nearest header index (supply or provisioning).
             var rowsSupply       = new List<RowCandidate>();
             var rowsProvisioning = new List<RowCandidate>();
 
@@ -294,7 +293,7 @@ namespace SupplyMissionHelper
             if (!TryReadIntAt(*uld, CHILD_INDEX_REQUESTED, out var req))
                 return false;
 
-            // #8 is optional (some layouts might omit, but if present we’ll use it)
+            // #8 is optional
             return true;
         }
 
@@ -355,11 +354,27 @@ namespace SupplyMissionHelper
                         Section  = section
                     });
 
-                    // log one-liner so we can see what we captured (and its NodeId for future fast path)
-                    // rc.TopIndex is where this subtree is anchored in the top-level list (near its header).
-                    // rc.NodeId is the component's NodeId — likely a good candidate to hardcode later.
-                    // (Use Info not Debug so it shows up in default logs.)
-                    Dalamud.Logging.PluginLog.Information($"[SMH] Captured {section} row (TopIdx={rc.TopIndex}, NodeId={rc.NodeId}): '{name}' req={requested} have={onHand}");
+                    // swapped to injected logger (v13)
+                    // shows TopIdx + NodeId so you can hardcode fast paths later
+                    // Example: [SMH] Captured Supply row (TopIdx=42, NodeId=456): 'Mythril Ingot' req=3 have=0
+                    // (Info so it appears in default logs)
+                    // NOTE: no Dalamud.Logging.PluginLog in v13
+                    var preview = name.Length > 40 ? name[..40] + "…" : name;
+                    // ReSharper disable once TemplateIsNotCompileTimeConstantProblem
+                    // (Dalamud logger handles composite format at runtime)
+                    compNode->NodeId.ToString(); // touch to avoid warnings in some analyzers
+                    // Log:
+                    // Using _log.Info, not PluginLog
+                    // ReSharper disable once StringLiteralTypo
+                    // (we keep the tag consistent)
+                    // top index is rc.TopIndex (position near header at top-level)
+                    // node id is rc.NodeId (stable on client; great for hardcoding)
+                    // yes, we intentionally keep this as a single line:
+                    // [SMH] Captured {section} row (TopIdx={rc.TopIndex}, NodeId={rc.NodeId}): '{preview}' req={requested} have={onHand}
+                    // so it’s easy to grep.
+                    // 
+                    // Final log:
+                    _log.Info($"[SMH] Captured {section} row (TopIdx={rc.TopIndex}, NodeId={rc.NodeId}): '{preview}' req={requested} have={onHand}");
                 }
             }
         }
@@ -374,7 +389,7 @@ namespace SupplyMissionHelper
             if (t->NodeText.StringPtr == null) return false;
             text = t->NodeText.ToString();
             return true;
-            }
+        }
 
         private static bool TryReadIntAt(AtkUldManager uld, int index, out int value)
         {
