@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.Globalization;
 using System.Linq;
+using System.Runtime.InteropServices;
 using Dalamud.Plugin.Services;
 using FFXIVClientStructs.FFXIV.Component.GUI;
 
@@ -13,15 +13,8 @@ namespace SupplyMissionHelper
         private readonly IDataManager _data;
         private readonly IPluginLog _log;
 
-        // v13: confirmed name from your screenshot
-        private static readonly string[] CandidateAddonNames =
-        {
-            "ContentsInfoDetail",   // ← GC Supply/Provisioning mission sheet
-            // Fallback guesses, kept for safety:
-            "GrandCompanySupplyList",
-            "GcSupplyList",
-            "SupplyList",
-        };
+        private static readonly string[] PrimaryGcAddons = { "GrandCompanySupplyList" };
+        private static readonly string[] KnownDashboards = { "ContentsInfoDetail", "ContentsInfo" };
 
         public bool IsReady => _gameGui is not null && _data is not null;
 
@@ -32,183 +25,199 @@ namespace SupplyMissionHelper
             _log = log;
         }
 
-        public bool IsSupplyWindowOpen()
-        {
-            foreach (var name in CandidateAddonNames)
-            {
-                try
-                {
-                    var ptr = _gameGui.GetAddonByName(name, 1);
-                    if (ptr != nint.Zero)
-                        return true;
-                }
-                catch (Exception ex)
-                {
-                    _log.Warning($"Addon check failed for {name}: {ex.Message}");
-                }
-            }
-            return false;
-        }
+        public bool IsSupplyWindowOpen() => GetAddonPtr(PrimaryGcAddons) != nint.Zero;
 
         public List<MissionItem> TryReadMissions(out string? status)
         {
             status = null;
             var results = new List<MissionItem>();
 
-            var addonPtr = GetFirstAvailableAddonPtr();
-            if (addonPtr == nint.Zero)
+            var gcPtr = GetAddonPtr(PrimaryGcAddons);
+            if (gcPtr == nint.Zero)
             {
-                status = "Supply Mission window not detected.";
+                var dashPtr = GetAddonPtr(KnownDashboards);
+                if (dashPtr != nint.Zero)
+                {
+                    status = "Detected the Contents Info dashboard. Open the GC Personnel Officer → “Supply & Provisioning Missions” list window.";
+                    return results;
+                }
+
+                status = "Supply Mission list not detected. Open the GC “Supply & Provisioning Missions” window.";
                 return results;
             }
 
-            try
+            unsafe
             {
-                unsafe
+                var unit = (AtkUnitBase*)gcPtr;
+                if (unit == null || unit->UldManager.NodeListCount == 0)
                 {
-                    var addon = (AtkUnitBase*)addonPtr;
-                    if (addon == null || addon->UldManager.NodeListCount == 0)
-                    {
-                        status = "UI detected, but no nodes found.";
-                        return results;
-                    }
-
-                    // Collect all visible text strings in the addon for debugging & parsing
-                    var texts = new List<string>();
-                    for (var i = 0; i < addon->UldManager.NodeListCount; i++)
-                    {
-                        var node = addon->UldManager.NodeList[i];
-                        if (node == null || !node->IsVisible())
-                            continue;
-
-                        if (node->Type == NodeType.Text)
-                        {
-                            var t = (AtkTextNode*)node;
-                            if (t->NodeText.StringPtr != null)
-                            {
-                                var s = t->NodeText.ToString();
-                                if (!string.IsNullOrWhiteSpace(s))
-                                    texts.Add(s.Trim());
-                            }
-                        }
-                    }
-
-                    // Log what we see (first 40 lines max, to avoid spam)
-                    if (texts.Count > 0)
-                    {
-                        _log.Info($"[SMH] ContentsInfoDetail text dump ({Math.Min(texts.Count, 40)} shown / {texts.Count} total):");
-                        foreach (var line in texts.Take(40))
-                            _log.Info($"[SMH] · {line}");
-                    }
-                    else
-                    {
-                        _log.Info("[SMH] ContentsInfoDetail: no text nodes contained content.");
-                    }
-
-                    // Common state: no missions available today
-                    if (texts.Any(x => x.Contains("No more deliveries are being accepted today", StringComparison.OrdinalIgnoreCase)))
-                    {
-                        status = "No missions available today.";
-                        return results; // empty list is expected here
-                    }
-
-                    // Very simple heuristic parsing:
-                    // Look for lines with quantities (integers) and pair them with the closest preceding non-empty line (item name).
-                    // This is just to get you going; once we capture a dump on a day with missions, we’ll parse by exact nodes.
-                    var parsed = new List<MissionItem>();
-                    for (int i = 1; i < texts.Count; i++)
-                    {
-                        if (TryParseQty(texts[i], out var qty))
-                        {
-                            // find a plausible name one or two lines above
-                            var name = FindNearestName(texts, i - 1);
-                            if (!string.IsNullOrEmpty(name))
-                            {
-                                parsed.Add(new MissionItem
-                                {
-                                    Name = name,
-                                    Quantity = qty,
-                                    // ItemId unknown at this point; we can resolve via Lumina by name later
-                                    ItemId = 0
-                                });
-                            }
-                        }
-                    }
-
-                    if (parsed.Count > 0)
-                    {
-                        // Merge dupes by name to be tidy
-                        results = parsed
-                            .GroupBy(p => p.Name ?? string.Empty)
-                            .Select(g => new MissionItem
-                            {
-                                Name = g.Key,
-                                Quantity = g.Sum(x => x.Quantity),
-                                ItemId = 0
-                            })
-                            .ToList();
-
-                        status = $"Parsed {results.Count} mission item(s) (heuristic).";
-                        return results;
-                    }
-
-                    status = "UI detected, but no mission rows matched the heuristic parser.";
+                    status = "GC list detected, but no nodes were found.";
                     return results;
                 }
-            }
-            catch (Exception ex)
-            {
-                status = $"Scan failed: {ex.Message}";
-                _log.Error(ex, "TryReadMissions failed");
-                return new List<MissionItem>();
+
+                // 1) find an AtkComponentList (the rows/table)
+                var list = FindFirstListComponent(unit);
+                if (list == null)
+                {
+                    // No list found: dump a few texts to help mapping and return a friendly status.
+                    var all = CollectText(unit);
+                    if (all.Any(x => x.Contains("No more deliveries are being accepted today", StringComparison.OrdinalIgnoreCase)))
+                    {
+                        status = "No missions available today.";
+                        return results;
+                    }
+
+                    status = "GC list detected, but rows component wasn’t found (UI variant?).";
+                    return results;
+                }
+
+                // 2) iterate visible list items and scrape text from each row
+                var rowCount = list->ListLength; // total rows (includes empty/headers)
+                for (int i = 0; i < rowCount; i++)
+                {
+                    var item = list->GetItemRenderer(i);
+                    if (item == null || !item->AtkResNode.IsVisible())
+                        continue;
+
+                    // Typical row: multiple children; one text is the item name, one is qty.
+                    // We gather all texts in the row and then pick name + qty heuristically.
+                    var texts = CollectTextFromNode(&item->AtkResNode);
+                    if (texts.Count == 0) continue;
+
+                    var qty = TryPickQty(texts, out var val) ? val : 0;
+                    var name = TryPickName(texts);
+
+                    if (!string.IsNullOrEmpty(name) && qty > 0)
+                    {
+                        results.Add(new MissionItem
+                        {
+                            Name = name,
+                            Quantity = qty,
+                            ItemId = 0 // we’ll resolve to itemId later via Lumina (by Name → Item sheet)
+                        });
+                    }
+                }
+
+                if (results.Count == 0)
+                {
+                    status = "GC list parsed, but no mission rows with (name, qty) found (maybe capped today).";
+                    return results;
+                }
+
+                // Merge dupes by name (if the UI shows the same item in supply/provisioning)
+                results = results
+                    .GroupBy(r => r.Name ?? string.Empty)
+                    .Select(g => new MissionItem
+                    {
+                        Name = g.Key,
+                        Quantity = g.Sum(x => x.Quantity),
+                        ItemId = 0
+                    })
+                    .ToList();
+
+                status = $"Parsed {results.Count} mission item(s).";
+                return results;
             }
         }
 
-        private nint GetFirstAvailableAddonPtr()
+        // ---------------- helpers ----------------
+
+        private nint GetAddonPtr(IEnumerable<string> names)
         {
-            foreach (var name in CandidateAddonNames)
+            foreach (var n in names)
             {
                 try
                 {
-                    var ptr = _gameGui.GetAddonByName(name, 1);
-                    if (ptr != nint.Zero)
-                        return ptr;
+                    var ptr = _gameGui.GetAddonByName(n, 1);
+                    if (ptr != nint.Zero) return ptr;
                 }
-                catch { /* ignore; logged elsewhere */ }
+                catch { }
             }
             return nint.Zero;
         }
 
-        private static bool TryParseQty(string s, out int qty)
+        private unsafe static AtkComponentList* FindFirstListComponent(AtkUnitBase* unit)
         {
-            // Try to read a plain integer (e.g., "3", "12"), or "x 3"
-            s = s.Trim();
-            if (int.TryParse(s, NumberStyles.Integer, CultureInfo.InvariantCulture, out qty))
-                return true;
-
-            // common pattern "x 3" / "x3"
-            var idx = s.IndexOf('x');
-            if (idx >= 0)
+            for (var i = 0; i < unit->UldManager.NodeListCount; i++)
             {
-                var rest = s[(idx + 1)..].Trim();
-                if (int.TryParse(rest, NumberStyles.Integer, CultureInfo.InvariantCulture, out qty))
-                    return true;
-            }
+                var node = unit->UldManager.NodeList[i];
+                if (node == null || !node->IsVisible()) continue;
+                if (node->Type != NodeType.Component) continue;
 
-            qty = 0;
-            return false;
-        }
+                var compNode = (AtkComponentNode*)node;
+                if (compNode->Component == null) continue;
 
-        private static string? FindNearestName(List<string> texts, int startIndex)
-        {
-            // Look back 1-3 lines to find a non-numeric name-ish string
-            for (int k = 0; k < 3 && startIndex - k >= 0; k++)
-            {
-                var candidate = texts[startIndex - k].Trim();
-                if (!string.IsNullOrEmpty(candidate) && !int.TryParse(candidate, out _))
-                    return candidate;
+                // ComponentType == List → AtkComponentList
+                if (compNode->Component->Type == ComponentType.List)
+                    return (AtkComponentList*)compNode->Component;
             }
             return null;
+        }
+
+        private unsafe static List<string> CollectText(AtkUnitBase* unit)
+        {
+            var list = new List<string>();
+            for (var i = 0; i < unit->UldManager.NodeListCount; i++)
+            {
+                var node = unit->UldManager.NodeList[i];
+                if (node == null || !node->IsVisible()) continue;
+                if (node->Type != NodeType.Text) continue;
+
+                var t = (AtkTextNode*)node;
+                if (t->NodeText.StringPtr == null) continue;
+                var s = t->NodeText.ToString();
+                if (!string.IsNullOrWhiteSpace(s)) list.Add(s.Trim());
+            }
+            return list;
+        }
+
+        private unsafe static List<string> CollectTextFromNode(AtkResNode* root)
+        {
+            var texts = new List<string>();
+            Walk(root, n =>
+            {
+                if (n->Type == NodeType.Text)
+                {
+                    var t = (AtkTextNode*)n;
+                    if (t->NodeText.StringPtr != null)
+                    {
+                        var s = t->NodeText.ToString();
+                        if (!string.IsNullOrWhiteSpace(s))
+                            texts.Add(s.Trim());
+                    }
+                }
+            });
+            return texts;
+        }
+
+        private unsafe static void Walk(AtkResNode* node, Action<AtkResNode*> visitor)
+        {
+            if (node == null) return;
+            visitor(node);
+            for (var c = node->ChildNode; c != null; c = c->NextSiblingNode)
+                Walk(c, visitor);
+        }
+
+        private static bool TryPickQty(List<string> texts, out int qty)
+        {
+            // Look for an integer or "x N" in row texts; prefer the smallest positive number.
+            foreach (var s in texts)
+            {
+                if (int.TryParse(s, out qty) && qty > 0) return true;
+                var idx = s.IndexOf('x');
+                if (idx >= 0 && int.TryParse(s[(idx + 1)..].Trim(), out qty) && qty > 0) return true;
+            }
+            qty = 0; return false;
+        }
+
+        private static string? TryPickName(List<string> texts)
+        {
+            // Heuristic: longest non-numeric string in the row is usually the item name.
+            var nameish = texts
+                .Where(t => !int.TryParse(t, out _))
+                .OrderByDescending(t => t.Length)
+                .FirstOrDefault();
+            return string.IsNullOrWhiteSpace(nameish) ? null : nameish;
         }
     }
 
