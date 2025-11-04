@@ -1,8 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
-<Project Sdk="Microsoft.NET.Sdk">
-
-  <!-- Add the Dalamud SDK (pulled from nuget.org) -->
-  <Sdk Name="Dalamud.NET.Sdk" Version="13.1.0" />
+<Project Sdk="Dalamud.NET.Sdk/13.0.0">
 
   <PropertyGroup>
     <Authors>ahaberman25</Authors>
@@ -10,11 +7,9 @@
     <Version>1.0.0</Version>
     <Description>Calculate materials needed for Grand Company Supply Missions</Description>
     <PackageProjectUrl>https://github.com/ahaberman25/Supply-Mission-Helper</PackageProjectUrl>
-  </PropertyGroup>
 
-  <PropertyGroup>
-    <!-- Dalamud SDK targets .NET 8 -->
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- v13 is .NET 9 -->
+    <TargetFramework>net9.0-windows</TargetFramework>
     <Platforms>x64</Platforms>
     <Nullable>enable</Nullable>
     <LangVersion>latest</LangVersion>
@@ -23,9 +18,22 @@
     <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
   </PropertyGroup>
 
+  <!-- Ensure no legacy local DLLs get pulled in from a 'dalamud' folder -->
   <ItemGroup>
-    <!-- Keep the packager for Release packing -->
-    <PackageReference Include="DalamudPackager" Version="2.1.13" />
+    <Reference Remove="Dalamud" />
+    <Reference Remove="Dalamud.Bindings.ImGui" />
+    <Reference Remove="Lumina" />
+    <Reference Remove="Lumina.Excel" />
+    <Reference Remove="FFXIVClientStructs" />
+    <Reference Remove="Serilog.Sinks.File" />
   </ItemGroup>
+
+  <ItemGroup>
+    <None Remove="dalamud\**\*" />
+    <Content Remove="dalamud\**\*" />
+    <EmbeddedResource Remove="dalamud\**\*" />
+  </ItemGroup>
+
+  <!-- Do NOT include DalamudPackager or any manual DLL references; the SDK handles it. -->
 
 </Project>
